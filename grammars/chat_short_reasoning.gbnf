@@ -1,0 +1,12 @@
+root ::= "{" reasoning-key ":" short-string "," answer-key ":" answer-string "}"
+
+reasoning-key ::= "\"reasoning\""
+answer-key ::= "\"answer\""
+
+short-string ::= "\"" short-char{0,80} "\""
+answer-string ::= "\"" char{10,240} "\""
+
+short-char ::= [^"\\\x7F\x00-\x1F] | "\\" escape
+char ::= [^"\\\x7F\x00-\x1F] | "\\" escape
+escape ::= ["\\/bfnrt] | "u" hex hex hex hex
+hex ::= [0-9a-fA-F]

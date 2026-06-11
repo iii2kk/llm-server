@@ -1,0 +1,6 @@
+root  ::= think res
+think ::= "<think>" think-text "</think>"
+
+think-text ::= .{0,80}
+
+res ::= .*
