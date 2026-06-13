@@ -33,7 +33,22 @@ def required_env(name: str) -> str:
     return value
 
 
-LLAMA_BIN_DIR = Path(required_env("LLAMA_BIN_DIR")).expanduser()
+legacy_llama_bin_dir = os.getenv("LLAMA_BIN_DIR", "").strip()
+LLAMA_BIN_DIRS = {
+    backend_id: Path(value).expanduser()
+    for backend_id, value in {
+        "vulkan": os.getenv("LLAMA_BIN_DIR_VULKAN", legacy_llama_bin_dir).strip(),
+        "rocm": os.getenv("LLAMA_BIN_DIR_ROCM", "").strip(),
+    }.items()
+    if value
+}
+if not LLAMA_BIN_DIRS:
+    raise RuntimeError(
+        "At least one of LLAMA_BIN_DIR, LLAMA_BIN_DIR_VULKAN, or LLAMA_BIN_DIR_ROCM must be set"
+    )
+DEFAULT_LLAMA_BACKEND = os.getenv("DEFAULT_LLAMA_BACKEND", "vulkan").strip().lower()
+if DEFAULT_LLAMA_BACKEND not in LLAMA_BIN_DIRS:
+    DEFAULT_LLAMA_BACKEND = next(iter(LLAMA_BIN_DIRS))
 MODEL_DIR = Path(required_env("MODEL_DIR")).expanduser()
 BACKEND_HOST = os.getenv("BACKEND_HOST", "127.0.0.1")
 BACKEND_PORT = int(os.getenv("BACKEND_PORT", "8080"))
@@ -49,6 +64,7 @@ MODEL_SETTINGS_FILE = SETTINGS_DIR / "model-settings.json"
 RECENT_MODELS_MAX = 5
 SAVED_BACKEND_SETTING_KEYS = (
     "model",
+    "backend",
     "mmproj_enabled",
     "ctx_size",
     "gpu_layers",
@@ -64,6 +80,10 @@ SAVED_BACKEND_SETTING_KEYS = (
 )
 MODEL_MODES = ("auto", "chat", "embeddings")
 POOLING_TYPES = ("auto", "mean", "cls", "last")
+BACKEND_LABELS = {
+    "vulkan": "Vulkan",
+    "rocm": "ROCm (HIP)",
+}
 GGUF_POOLING_NAMES = {
     0: "none",
     1: "mean",
@@ -293,6 +313,7 @@ class BackendInstance:
         self.run_id: int | None = None
         self.effective_mode = "chat"
         self.effective_pooling: str | None = None
+        self.backend_id = DEFAULT_LLAMA_BACKEND
         self.log_store = BackendLogStore(LOG_BUFFER_MAX_BYTES)
         self.aggregate_log_store = aggregate_log_store
         self._reader_task: asyncio.Task[None] | None = None
@@ -329,6 +350,7 @@ class BackendInstance:
             "load_progress": load["progress"],
             "effective_mode": self.effective_mode,
             "effective_pooling": self.effective_pooling,
+            "backend": self.backend_id,
             "command": self.command,
         }
 
@@ -351,12 +373,18 @@ class BackendInstance:
                     "status": await self.status(),
                 }
 
-            command = build_llama_command(settings, model=self.model_path, port=self.port)
+            backend_id, llama_bin_dir = resolve_llama_backend(settings.get("backend"))
+            command = build_llama_command(
+                settings,
+                model=self.model_path,
+                port=self.port,
+                llama_bin_dir=llama_bin_dir,
+            )
             run_id = await self.log_store.start_run()
             env = os.environ.copy()
             env["LD_LIBRARY_PATH"] = prepend_env_path(
                 env.get("LD_LIBRARY_PATH", ""),
-                str(LLAMA_BIN_DIR.resolve()),
+                str(llama_bin_dir.resolve()),
             )
             try:
                 process = await asyncio.create_subprocess_exec(
@@ -374,6 +402,7 @@ class BackendInstance:
             self.settings = dict(settings)
             self.effective_mode = str(settings["effective_mode"])
             self.effective_pooling = settings.get("effective_pooling")
+            self.backend_id = backend_id
             self.started_at = time.time()
             self.last_used_at = self.started_at
             self.last_exit_code = None
@@ -1021,6 +1050,15 @@ def validate_pooling(value: Any) -> str:
     return pooling
 
 
+def resolve_llama_backend(value: Any) -> tuple[str, Path]:
+    backend_id = DEFAULT_LLAMA_BACKEND if value in (None, "") else str(value).strip().lower()
+    llama_bin_dir = LLAMA_BIN_DIRS.get(backend_id)
+    if llama_bin_dir is None:
+        available = ", ".join(LLAMA_BIN_DIRS)
+        raise ValueError(f"backend must be one of: {available}")
+    return backend_id, llama_bin_dir
+
+
 def effective_model_config(model: Path, settings: dict[str, Any]) -> dict[str, Any]:
     metadata = read_gguf_metadata(model)
     configured_mode = validate_model_mode(settings.get("mode"))
@@ -1049,6 +1087,7 @@ def effective_model_config(model: Path, settings: dict[str, Any]) -> dict[str, A
 def normalize_backend_settings(model_id: str, model_path: Path, settings: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(settings)
     normalized["model"] = model_id
+    normalized["backend"] = resolve_llama_backend(normalized.get("backend"))[0]
     normalized["mode"] = validate_model_mode(normalized.get("mode"))
     normalized["pooling"] = validate_pooling(normalized.get("pooling"))
     config = effective_model_config(model_path, normalized)
@@ -1242,8 +1281,16 @@ def optional_bool(settings: dict[str, Any], key: str, default: bool) -> bool:
     return bool(value)
 
 
-def build_llama_command(settings: dict[str, Any], *, model: Path, port: int) -> list[str]:
-    llama_server = (LLAMA_BIN_DIR / "llama-server").resolve()
+def build_llama_command(
+    settings: dict[str, Any],
+    *,
+    model: Path,
+    port: int,
+    llama_bin_dir: Path | None = None,
+) -> list[str]:
+    if llama_bin_dir is None:
+        _, llama_bin_dir = resolve_llama_backend(settings.get("backend"))
+    llama_server = (llama_bin_dir / "llama-server").resolve()
     if not llama_server.exists():
         raise ValueError(f"llama-server not found: {llama_server}")
     if not os.access(llama_server, os.X_OK):
@@ -1423,6 +1470,15 @@ async def api_models(authorization: str | None = Header(default=None)) -> JSONRe
         {
             "models": model_options(),
             "model_dir": str(MODEL_DIR.resolve()),
+            "backends": [
+                {
+                    "id": backend_id,
+                    "label": BACKEND_LABELS.get(backend_id, backend_id),
+                    "bin_dir": str(bin_dir.resolve()),
+                }
+                for backend_id, bin_dir in LLAMA_BIN_DIRS.items()
+            ],
+            "default_backend": DEFAULT_LLAMA_BACKEND,
             "saved_settings": await registry.saved_settings_snapshot(),
             "recent_models": await registry.recent_model_ids_snapshot(),
         }
@@ -2024,12 +2080,13 @@ WEB_UI = r"""
       overflow: auto;
       min-width: 0;
     }
-    .backend-table th:nth-child(1), .backend-table td:nth-child(1) { width: 43%; }
+    .backend-table th:nth-child(1), .backend-table td:nth-child(1) { width: 34%; }
     .backend-table th:nth-child(2), .backend-table td:nth-child(2) { width: 10%; }
-    .backend-table th:nth-child(3), .backend-table td:nth-child(3) { width: 11%; }
-    .backend-table th:nth-child(4), .backend-table td:nth-child(4) { width: 7%; }
-    .backend-table th:nth-child(5), .backend-table td:nth-child(5) { width: 8%; }
-    .backend-table th:nth-child(6), .backend-table td:nth-child(6) { width: 21%; }
+    .backend-table th:nth-child(3), .backend-table td:nth-child(3) { width: 10%; }
+    .backend-table th:nth-child(4), .backend-table td:nth-child(4) { width: 11%; }
+    .backend-table th:nth-child(5), .backend-table td:nth-child(5) { width: 7%; }
+    .backend-table th:nth-child(6), .backend-table td:nth-child(6) { width: 8%; }
+    .backend-table th:nth-child(7), .backend-table td:nth-child(7) { width: 20%; }
     .backend-table td:last-child {
       white-space: nowrap;
     }
@@ -2245,6 +2302,7 @@ WEB_UI = r"""
             <thead>
               <tr>
                 <th>Model</th>
+                <th>Backend</th>
                 <th>Mode</th>
                 <th>State</th>
                 <th>Port</th>
@@ -2303,6 +2361,10 @@ WEB_UI = r"""
         </label>
         <p class="meta" id="mmprojMeta"></p>
         <div class="settings" style="margin-top: 12px">
+          <div class="field">
+            <label for="backend">Backend</label>
+            <select id="backend"></select>
+          </div>
           <div class="field">
             <label for="mode">Mode</label>
             <select id="mode">
@@ -2402,6 +2464,7 @@ WEB_UI = r"""
     const modelFilter = document.getElementById('modelFilter');
     const mmprojEnabled = document.getElementById('mmproj_enabled');
     const mmprojMeta = document.getElementById('mmprojMeta');
+    const backendInput = document.getElementById('backend');
     const modeInput = document.getElementById('mode');
     const poolingInput = document.getElementById('pooling');
     const gpuLayersMode = document.getElementById('gpu_layers_mode');
@@ -2415,6 +2478,8 @@ WEB_UI = r"""
     const messageLine = document.getElementById('messageLine');
     let allModels = [];
     let modelDir = '';
+    let availableBackends = [];
+    let defaultBackend = '';
     let savedSettings = {};
     let recentModels = [];
     let selectedModelId = localStorage.getItem('selectedModelId') || '';
@@ -2472,6 +2537,7 @@ WEB_UI = r"""
       if (!selectedModelId) throw new Error('No model selected.');
       const payload = {
         model: selectedModelId,
+        backend: backendInput.value,
         mode: modeInput.value,
         pooling: poolingInput.value,
         mmproj_enabled: mmprojEnabled.checked && !mmprojEnabled.disabled,
@@ -2499,6 +2565,11 @@ WEB_UI = r"""
     function modelName(modelId) {
       const item = allModels.find((entry) => entry.relative_path === modelId);
       return item?.display_name || modelId;
+    }
+
+    function backendName(backendId) {
+      const backend = availableBackends.find((entry) => entry.id === backendId);
+      return backend?.label || backendId || '-';
     }
 
     function updateGpuLayersInput(shouldFocus = false) {
@@ -2558,6 +2629,7 @@ WEB_UI = r"""
       setSelectValue('flash_attn', settings.flash_attn, 'auto');
       setSelectValue('reasoning', settings.reasoning, 'off');
       setSelectValue('reasoning_format', settings.reasoning_format, 'none');
+      setSelectValue('backend', settings.backend, defaultBackend);
       setSelectValue('mode', settings.mode, 'auto');
       setSelectValue('pooling', settings.pooling, 'auto');
       updatePoolingControl();
@@ -2567,6 +2639,16 @@ WEB_UI = r"""
       const data = await api('/api/models');
       allModels = data.models || [];
       modelDir = data.model_dir || '';
+      availableBackends = data.backends || [];
+      defaultBackend = data.default_backend || availableBackends[0]?.id || '';
+      backendInput.innerHTML = '';
+      for (const backend of availableBackends) {
+        const option = document.createElement('option');
+        option.value = backend.id;
+        option.textContent = backend.label || backend.id;
+        option.title = backend.bin_dir || '';
+        backendInput.appendChild(option);
+      }
       savedSettings = data.saved_settings || {};
       recentModels = data.recent_models || [];
       renderRecentModels();
@@ -2655,8 +2737,9 @@ WEB_UI = r"""
         const startDisabled = missing || running;
         const selectDisabled = missing;
         const tr = document.createElement('tr');
+        const savedBackend = savedSettings[modelId]?.backend || defaultBackend;
         tr.innerHTML = `
-          <td class="model-cell">${escapeHtml(item?.display_name || modelId)}<span class="subtext">${escapeHtml(modelId)}</span></td>
+          <td class="model-cell">${escapeHtml(item?.display_name || modelId)}<span class="subtext">${escapeHtml(modelId)} / ${escapeHtml(backendName(savedBackend))}</span></td>
           <td>${stateHtml}</td>
           <td>
             <button class="compact ${running ? 'neutral' : ''}" data-action="start-recent" data-model="${escapeAttr(modelId)}" ${startDisabled ? 'disabled' : ''}>${running ? 'Running' : 'Start'}</button>
@@ -2732,7 +2815,7 @@ WEB_UI = r"""
       rows.innerHTML = '';
       if (!backends.length) {
         const tr = document.createElement('tr');
-        tr.innerHTML = '<td colspan="6" style="color: var(--muted)">No models have been started.</td>';
+        tr.innerHTML = '<td colspan="7" style="color: var(--muted)">No models have been started.</td>';
         rows.appendChild(tr);
         return;
       }
@@ -2742,6 +2825,7 @@ WEB_UI = r"""
         const uptime = backend.uptime_seconds == null ? '-' : `${backend.uptime_seconds}s`;
         tr.innerHTML = `
           <td class="model-cell">${escapeHtml(modelName(backend.model_id))}</td>
+          <td><span class="pill">${escapeHtml(backendName(backend.backend || defaultBackend))}</span></td>
           <td><span class="pill ${backend.effective_mode === 'embeddings' ? 'ok' : ''}">${escapeHtml(backend.effective_mode || 'chat')}</span>${backend.effective_pooling ? `<span class="subtext">${escapeHtml(backend.effective_pooling)}</span>` : ''}</td>
           <td><span class="state"><span class="dot ${dotClass}"></span>${escapeHtml(stateLabel(backend))}</span></td>
           <td>${backend.port ?? '-'}</td>

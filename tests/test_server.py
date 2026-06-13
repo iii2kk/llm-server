@@ -152,10 +152,34 @@ class BackendSettingsTests(unittest.TestCase):
         llama_server = fake_bin_dir / "llama-server"
         llama_server.write_text("#!/bin/sh\n", encoding="ascii")
         llama_server.chmod(0o755)
-        with patch.object(server, "LLAMA_BIN_DIR", fake_bin_dir):
-            command = server.build_llama_command(settings, model=self.model, port=9999)
+        command = server.build_llama_command(
+            settings,
+            model=self.model,
+            port=9999,
+            llama_bin_dir=fake_bin_dir,
+        )
         self.assertIn("--embeddings", command)
         self.assertEqual(command[command.index("--pooling") + 1], "last")
+
+    def test_backend_selection_is_normalized_and_validated(self) -> None:
+        with patch.object(
+            server,
+            "LLAMA_BIN_DIRS",
+            {"vulkan": Path("/vulkan"), "rocm": Path("/rocm")},
+        ):
+            settings = server.normalize_backend_settings(
+                "embedding.gguf",
+                self.model,
+                {"backend": "rocm", "mode": "auto", "pooling": "auto"},
+            )
+            self.assertEqual(settings["backend"], "rocm")
+
+            with self.assertRaisesRegex(ValueError, "backend must be one of"):
+                server.normalize_backend_settings(
+                    "embedding.gguf",
+                    self.model,
+                    {"backend": "cuda", "mode": "auto", "pooling": "auto"},
+                )
 
     def test_manual_embedding_requires_pooling_when_unknown(self) -> None:
         model = self.root / "unknown.gguf"
