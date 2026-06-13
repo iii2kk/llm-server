@@ -160,6 +160,24 @@ class BackendSettingsTests(unittest.TestCase):
         )
         self.assertIn("--embeddings", command)
         self.assertEqual(command[command.index("--pooling") + 1], "last")
+        self.assertNotIn("--direct-io", command)
+
+    def test_rocm_command_enables_direct_io(self) -> None:
+        fake_bin_dir = self.root / "rocm-bin"
+        fake_bin_dir.mkdir()
+        llama_server = fake_bin_dir / "llama-server"
+        llama_server.write_text("#!/bin/sh\n", encoding="ascii")
+        llama_server.chmod(0o755)
+
+        with patch.object(server, "LLAMA_BIN_DIRS", {"rocm": fake_bin_dir}):
+            command = server.build_llama_command(
+                {"backend": "rocm"},
+                model=self.model,
+                port=9999,
+                llama_bin_dir=fake_bin_dir,
+            )
+
+        self.assertIn("--direct-io", command)
 
     def test_backend_selection_is_normalized_and_validated(self) -> None:
         with patch.object(

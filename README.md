@@ -40,7 +40,7 @@ uv run python server.py
 
 ブラウザで以下を開き、モデルと起動設定を選んで `Start` を押します。複数モデルを起動すると、`BACKEND_PORT` を開始ポートとして `8080`, `8081`, `8082`... のようにモデルごとの `llama-server` が別ポートで起動します。
 
-`Backend` では設定済みのVulkan版またはROCm版をモデルごとに選択できます。同じモデルは一度に1プロセスだけ起動します。実行中モデルのBackendを変更する場合は `Restart` を押してください。
+`Backend` では設定済みのVulkan版またはROCm版をモデルごとに選択できます。同じモデルは一度に1プロセスだけ起動します。実行中モデルのBackendを変更する場合は `Restart` を押してください。ROCm版では、mmapされたモデルからHIPメモリへのコピーによるロード遅延を避けるため、proxyが `--direct-io` を自動的に追加します。Vulkan版には追加しません。
 
 ```text
 http://localhost:8000/

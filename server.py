@@ -1289,7 +1289,13 @@ def build_llama_command(
     llama_bin_dir: Path | None = None,
 ) -> list[str]:
     if llama_bin_dir is None:
-        _, llama_bin_dir = resolve_llama_backend(settings.get("backend"))
+        backend_id, llama_bin_dir = resolve_llama_backend(settings.get("backend"))
+    else:
+        backend_id = (
+            DEFAULT_LLAMA_BACKEND
+            if settings.get("backend") in (None, "")
+            else str(settings["backend"]).strip().lower()
+        )
     llama_server = (llama_bin_dir / "llama-server").resolve()
     if not llama_server.exists():
         raise ValueError(f"llama-server not found: {llama_server}")
@@ -1307,6 +1313,9 @@ def build_llama_command(
         "--log-colors",
         "off",
     ]
+    if backend_id == "rocm":
+        command.append("--direct-io")
+
     mmproj = find_mmproj_for_model(model)
     if optional_bool(settings, "mmproj_enabled", True) and mmproj is not None:
         command.extend(["--mmproj", str(mmproj)])
