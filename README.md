@@ -64,6 +64,33 @@ Web UIから起動した `llama-server` のログは、`uv run python server.py`
 
 モデル用途はGGUF先頭のarchitecture、pooling、embedding次元数から自動判定します。Web UIの `Mode` と `Pooling` でモデルごとに上書きできます。embeddingモデルは `llama-server --embeddings` で起動されるため、同じGGUFをchat用とembedding用に同時ロードすることはありません。実行中モデルの用途を変更した場合は `Restart` してください。
 
+## モデル起動設定
+
+Web UIでモデルを選択すると、`Start` または `Restart` 時に以下の値を設定できます。数値欄を空欄にした場合、そのオプションはproxyから渡さず、使用中の `llama-server` とGGUFモデルの既定値に任せます。入力欄の薄い文字は例または代表的な既定値であり、入力済みの値ではありません。
+
+| UI項目 | 指定できる値 | 説明 | `llama-server` オプション |
+| --- | --- | --- | --- |
+| `Use MMProj` | on / off | モデルと同じディレクトリから検出した `mmproj*.gguf` を使います。画像や音声などのマルチモーダル入力に必要です。対応するMMProjがない場合は選択できません。 | `--mmproj` |
+| `Mode` | `auto`, `chat`, `embeddings` | モデルの用途です。`auto` はGGUFのarchitecture、pooling、embedding次元数から判定します。`embeddings` ではembedding専用モードで起動します。 | `--embeddings` |
+| `Pooling` | `auto`, `mean`, `cls`, `last` | embeddingベクトルの集約方法です。`auto` はGGUFの設定を使います。chatモードでは使用しません。embeddingモデルに利用可能なpooling情報がない場合は明示指定が必要です。 | `--pooling` |
+| `Context` | 整数または空欄 | promptを保持できるコンテキストサイズをtoken数で指定します。空欄ではGGUFから読み込まれる値を使います。値を大きくすると長い入力を扱えますが、KV cacheのメモリ使用量も増えます。 | `--ctx-size` |
+| `GPU Layers` | `auto`, `all`, `custom` | VRAMへ配置するモデル層数です。`auto` はbackendに任せ、`all` は可能な限り全層、`custom` は指定した非負整数の層をGPUへ配置します。VRAMを超える指定ではロードに失敗する場合があります。 | `--n-gpu-layers` |
+| `Threads` | 整数または空欄 | 生成に使用するCPU thread数です。空欄ではbackendの自動設定を使います。CPU推論やGPUへ配置されない処理の性能に影響します。 | `--threads` |
+| `Batch` | 整数または空欄 | prompt処理で一度に扱える論理batchの最大token数です。大きいほどprompt処理が速くなる場合がありますが、メモリ使用量が増えます。 | `--batch-size` |
+| `UBatch` | 整数または空欄 | 実際の計算単位となる物理batchの最大token数です。小さくするとピークメモリを抑えられますが、prompt処理が遅くなる場合があります。 | `--ubatch-size` |
+| `Parallel` | 整数または空欄 | 同時処理に使うserver slot数です。空欄ではbackendが自動決定します。値を増やすと同時リクエストを処理しやすくなりますが、Contextとメモリをslot間で使用します。 | `--parallel` |
+| `Flash Attention` | `auto`, `on`, `off` | Flash Attentionの使用方法です。`auto` はbackendとデバイスの対応状況に任せます。対応環境では速度向上やメモリ削減が期待できます。 | `--flash-attn` |
+| `Reasoning` | `off`, `auto`, `on` | chat templateのreasoning/thinking機能を無効化、自動判定、または有効化します。embeddingモードでは通常使用しません。 | `--reasoning` |
+| `Reasoning Format` | `none`, `auto`, `deepseek`, `deepseek-legacy` | thinking部分をレスポンスから抽出する形式を指定します。`none` は抽出せず `message.content` に残し、`auto` はtemplateから判定します。`deepseek` 系は対応するthought tagを解析します。 | `--reasoning-format` |
+
+### Contextとembeddingの注意点
+
+`Context` はchatモデルだけでなくembeddingモデルにも適用されます。実際の1リクエストあたりの上限は、指定したContext、モデルの学習時Context、`Parallel` によるslot構成などからbackendが決定します。起動ログの `n_ctx`、`n_ctx_seq`、`new slot, n_ctx = ...` が実際に割り当てられた値です。
+
+embeddingではpooling方式やモデル構造により、入力全体を1回のUBatchで処理する必要があります。この場合はContextが十分でも `UBatch` が入力token数より小さいと処理できません。長文をembeddingする場合は、`Context`、`Batch`、`UBatch` を想定する最大入力token数以上に設定してください。値を大きくするとメモリ消費も増えるため、ロードログと実際の入力長を見ながら調整します。
+
+設定はモデルごとに `.llm-server/model-settings.json` へ保存されます。APIリクエストで既知の未ロードモデルが自動ロードされる場合も、そのモデルの保存済み設定が使われます。実行中のモデルに変更を反映するには `Restart` を押してください。
+
 ## OpenAI互換API
 
 通常の非streamingリクエスト:
