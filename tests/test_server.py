@@ -318,5 +318,24 @@ class EmbeddingsApiTests(unittest.TestCase):
         self.assertEqual(response.json()["data"][0]["embedding"], [0.1, 0.2])
 
 
+class WebUiTests(unittest.TestCase):
+    def test_ui_and_static_assets_are_served(self) -> None:
+        with TestClient(server.app) as client:
+            index = client.get("/")
+            stylesheet = client.get("/static/app.css")
+            script = client.get("/static/app.js")
+
+        self.assertEqual(index.status_code, 200)
+        self.assertIn('href="/static/app.css"', index.text)
+        self.assertIn('src="/static/app.js"', index.text)
+        self.assertIn('id="settingsDialog"', index.text)
+        self.assertIn('id="modelRows"', index.text)
+        self.assertEqual(stylesheet.status_code, 200)
+        self.assertIn(".settings-dialog", stylesheet.text)
+        self.assertEqual(script.status_code, 200)
+        self.assertIn("function connectLogStream()", script.text)
+        self.assertIn("setInterval(loadStatus, 5000)", script.text)
+
+
 if __name__ == "__main__":
     unittest.main()

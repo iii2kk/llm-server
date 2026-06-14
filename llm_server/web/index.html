@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Local LLM Server</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Local LLM Server</h1>
+      <div class="header-controls">
+        <div class="status-menu">
+          <button id="statusToggle" class="status-toggle" type="button" aria-expanded="false" title="Status JSON">
+            <span id="proxyStatusDot" class="dot"></span>
+          </button>
+          <pre id="statusJson" class="status-json-popover" hidden>{}</pre>
+        </div>
+        <div class="field" style="max-width: 320px">
+          <label for="apiKey">Proxy API Key</label>
+          <input id="apiKey" type="password" placeholder="PROXY_API_KEY">
+        </div>
+      </div>
+    </header>
+
+    <section class="layout">
+      <section class="panel">
+        <h2>Running Models</h2>
+        <div class="summary" style="margin-top: 12px">
+          <div class="metric"><span>Active</span><strong id="activeCount">0</strong></div>
+          <div class="metric"><span>Latest</span><strong id="latestModel">none</strong></div>
+          <div class="metric"><span>Start Port</span><strong id="startPort">-</strong></div>
+        </div>
+        <div class="table-wrap">
+          <table class="backend-table">
+            <thead>
+              <tr>
+                <th>Model</th>
+                <th>Backend</th>
+                <th>Mode</th>
+                <th>State</th>
+                <th>Port</th>
+                <th>Uptime</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="backendRows"></tbody>
+          </table>
+        </div>
+        <div class="actions">
+          <button id="stopAllBtn" class="danger">Stop All</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Recent Models</h2>
+        <div class="table-wrap" style="margin-top: 12px">
+          <table class="recent-table">
+            <thead>
+              <tr>
+                <th>Model</th>
+                <th>State</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="recentRows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Model Catalog</h2>
+        <div class="field" style="margin-top: 12px">
+          <label for="modelFilter">Filter</label>
+          <input id="modelFilter" type="search" placeholder="name or path">
+        </div>
+        <div class="model-list-wrap">
+          <table class="model-table">
+            <thead>
+              <tr>
+                <th>Model</th>
+                <th>Size</th>
+                <th>Mode</th>
+                <th>MMProj</th>
+                <th>Saved</th>
+                <th>State</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="modelRows"></tbody>
+          </table>
+        </div>
+        <div class="actions">
+          <button id="refreshBtn" class="neutral">Refresh</button>
+        </div>
+        <p class="meta" id="modelMeta"></p>
+        <p class="meta" id="messageLine"></p>
+      </section>
+
+      <section class="panel log-panel" id="logsPanel">
+        <div class="toolbar">
+          <h2>Logs</h2>
+          <div class="field log-select">
+            <label for="logModel">Source</label>
+            <select id="logModel">
+              <option value="">All models</option>
+            </select>
+          </div>
+          <label class="check-row log-auto-scroll" for="autoScroll">
+            <input id="autoScroll" type="checkbox" checked>
+            Auto-scroll
+          </label>
+          <button id="clearLogsBtn" class="neutral compact">Clear</button>
+          <span class="status-line" id="logStreamState">connecting</span>
+          <button id="toggleLogsBtn" class="neutral compact" type="button" aria-expanded="true">Minimize</button>
+        </div>
+        <pre id="logsPre" class="logs"></pre>
+      </section>
+    </section>
+  </main>
+
+  <dialog id="settingsDialog" class="settings-dialog">
+    <div class="settings-dialog-inner">
+      <div class="settings-dialog-head">
+        <h2 id="settingsTitle">Configure</h2>
+        <button type="button" id="settingsCloseBtn" class="neutral compact">Close</button>
+      </div>
+      <label class="check-row" for="mmproj_enabled">
+        <input id="mmproj_enabled" type="checkbox" checked>
+        Use MMProj
+      </label>
+      <p class="meta" id="mmprojMeta"></p>
+      <div class="settings" style="margin-top: 12px">
+        <div class="field">
+          <label for="backend">Backend</label>
+          <select id="backend"></select>
+        </div>
+        <div class="field">
+          <label for="mode">Mode</label>
+          <select id="mode">
+            <option value="auto">auto</option>
+            <option value="chat">chat</option>
+            <option value="embeddings">embeddings</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="pooling">Pooling</label>
+          <select id="pooling">
+            <option value="auto">auto</option>
+            <option value="mean">mean</option>
+            <option value="cls">cls</option>
+            <option value="last">last</option>
+          </select>
+        </div>
+        <div class="field"><label for="ctx_size">Context</label><input id="ctx_size" type="number" placeholder="4096"></div>
+        <div class="field">
+          <label for="gpu_layers_mode">GPU Layers</label>
+          <select id="gpu_layers_mode">
+            <option value="auto">auto</option>
+            <option value="all">all</option>
+            <option value="custom">custom</option>
+          </select>
+          <input id="gpu_layers" type="number" min="0" step="1" placeholder="layers" hidden style="margin-top: 8px">
+        </div>
+        <div class="field"><label for="threads">Threads</label><input id="threads" type="number" placeholder="auto"></div>
+        <div class="field"><label for="batch_size">Batch</label><input id="batch_size" type="number" placeholder="2048"></div>
+        <div class="field"><label for="ubatch_size">UBatch</label><input id="ubatch_size" type="number" placeholder="512"></div>
+        <div class="field"><label for="parallel">Parallel</label><input id="parallel" type="number" placeholder="auto"></div>
+        <div class="field">
+          <label for="flash_attn">Flash Attention</label>
+          <select id="flash_attn">
+            <option value="auto">auto</option>
+            <option value="on">on</option>
+            <option value="off">off</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="reasoning">Reasoning</label>
+          <select id="reasoning">
+            <option value="off">off</option>
+            <option value="auto">auto</option>
+            <option value="on">on</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="reasoning_budget">Reasoning Budget</label>
+          <input id="reasoning_budget" type="number" min="-1" step="1" placeholder="-1 (unlimited)">
+        </div>
+        <div class="field">
+          <label for="reasoning_format">Reasoning Format</label>
+          <select id="reasoning_format">
+            <option value="none">none</option>
+            <option value="auto">auto</option>
+            <option value="deepseek">deepseek</option>
+            <option value="deepseek-legacy">deepseek-legacy</option>
+          </select>
+        </div>
+      </div>
+      <div class="actions">
+        <button type="button" id="dialogStartBtn">Start</button>
+        <button type="button" id="dialogRestartBtn" class="secondary">Restart</button>
+        <button type="button" id="settingsCancelBtn" class="neutral">Cancel</button>
+      </div>
+      <p class="meta" id="dialogMessage"></p>
+    </div>
+  </dialog>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
