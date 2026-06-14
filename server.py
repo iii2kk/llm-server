@@ -74,6 +74,7 @@ SAVED_BACKEND_SETTING_KEYS = (
     "parallel",
     "flash_attn",
     "reasoning",
+    "reasoning_budget",
     "reasoning_format",
     "mode",
     "pooling",
@@ -1252,6 +1253,13 @@ def optional_int(settings: dict[str, Any], key: str) -> int | None:
         raise ValueError(f"{key} must be an integer") from exc
 
 
+def optional_reasoning_budget(settings: dict[str, Any]) -> int | None:
+    value = optional_int(settings, "reasoning_budget")
+    if value is not None and value < -1:
+        raise ValueError("reasoning_budget must be -1 or a non-negative integer")
+    return value
+
+
 def optional_gpu_layers(settings: dict[str, Any]) -> str | None:
     value = settings.get("gpu_layers")
     if value in (None, ""):
@@ -1349,6 +1357,10 @@ def build_llama_command(
     reasoning = settings.get("reasoning")
     if reasoning in ("auto", "on", "off"):
         command.extend(["--reasoning", str(reasoning)])
+
+    reasoning_budget = optional_reasoning_budget(settings)
+    if reasoning_budget is not None:
+        command.extend(["--reasoning-budget", str(reasoning_budget)])
 
     reasoning_format = settings.get("reasoning_format")
     if reasoning_format in ("auto", "none", "deepseek", "deepseek-legacy"):
@@ -2422,6 +2434,10 @@ WEB_UI = r"""
             </select>
           </div>
           <div class="field">
+            <label for="reasoning_budget">Reasoning Budget</label>
+            <input id="reasoning_budget" type="number" min="-1" step="1" placeholder="-1 (unlimited)">
+          </div>
+          <div class="field">
             <label for="reasoning_format">Reasoning Format</label>
             <select id="reasoning_format">
               <option value="none">none</option>
@@ -2560,7 +2576,7 @@ WEB_UI = r"""
         if (gpuLayersInput.value === '') throw new Error('GPU Layers custom value is required.');
         payload.gpu_layers = Number(gpuLayersInput.value);
       }
-      for (const key of ['ctx_size', 'threads', 'batch_size', 'ubatch_size', 'parallel']) {
+      for (const key of ['ctx_size', 'threads', 'batch_size', 'ubatch_size', 'parallel', 'reasoning_budget']) {
         const value = document.getElementById(key).value;
         if (value !== '') payload[key] = Number(value);
       }
@@ -2618,7 +2634,7 @@ WEB_UI = r"""
       mmprojEnabled.checked = hasMmproj && (hasOwn(settings, 'mmproj_enabled') ? Boolean(settings.mmproj_enabled) : true);
       mmprojMeta.textContent = hasMmproj ? `MMProj: ${mmprojPath}` : 'MMProj: none';
 
-      for (const key of ['ctx_size', 'threads', 'batch_size', 'ubatch_size', 'parallel']) {
+      for (const key of ['ctx_size', 'threads', 'batch_size', 'ubatch_size', 'parallel', 'reasoning_budget']) {
         setNumberValue(key, settings);
       }
 

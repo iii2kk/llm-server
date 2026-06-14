@@ -179,6 +179,37 @@ class BackendSettingsTests(unittest.TestCase):
 
         self.assertIn("--direct-io", command)
 
+    def test_reasoning_budget_is_added_to_command(self) -> None:
+        fake_bin_dir = self.root / "bin"
+        fake_bin_dir.mkdir()
+        llama_server = fake_bin_dir / "llama-server"
+        llama_server.write_text("#!/bin/sh\n", encoding="ascii")
+        llama_server.chmod(0o755)
+
+        command = server.build_llama_command(
+            {"reasoning": "on", "reasoning_budget": 512},
+            model=self.model,
+            port=9999,
+            llama_bin_dir=fake_bin_dir,
+        )
+
+        self.assertEqual(command[command.index("--reasoning-budget") + 1], "512")
+
+    def test_reasoning_budget_rejects_values_below_minus_one(self) -> None:
+        fake_bin_dir = self.root / "bin"
+        fake_bin_dir.mkdir()
+        llama_server = fake_bin_dir / "llama-server"
+        llama_server.write_text("#!/bin/sh\n", encoding="ascii")
+        llama_server.chmod(0o755)
+
+        with self.assertRaisesRegex(ValueError, "reasoning_budget"):
+            server.build_llama_command(
+                {"reasoning_budget": -2},
+                model=self.model,
+                port=9999,
+                llama_bin_dir=fake_bin_dir,
+            )
+
     def test_backend_selection_is_normalized_and_validated(self) -> None:
         with patch.object(
             server,
