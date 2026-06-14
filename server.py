@@ -2155,14 +2155,21 @@ WEB_UI = r"""
       border-radius: 8px;
     }
     .model-list-wrap table {
-      min-width: 980px;
+      min-width: 0;
     }
-    .model-table th:nth-child(1), .model-table td:nth-child(1) { width: 42%; }
-    .model-table th:nth-child(2), .model-table td:nth-child(2) { width: 11%; }
-    .model-table th:nth-child(3), .model-table td:nth-child(3) { width: 11%; }
-    .model-table th:nth-child(4), .model-table td:nth-child(4) { width: 11%; }
-    .model-table th:nth-child(5), .model-table td:nth-child(5) { width: 10%; }
-    .model-table th:nth-child(6), .model-table td:nth-child(6) { width: 15%; }
+    .model-table th:nth-child(1), .model-table td:nth-child(1) { width: 32%; }
+    .model-table th:nth-child(2), .model-table td:nth-child(2) { width: 9%; }
+    .model-table th:nth-child(3), .model-table td:nth-child(3) { width: 12%; }
+    .model-table th:nth-child(4), .model-table td:nth-child(4) { width: 9%; }
+    .model-table th:nth-child(5), .model-table td:nth-child(5) { width: 9%; }
+    .model-table th:nth-child(6), .model-table td:nth-child(6) { width: 12%; }
+    .model-table th:nth-child(7), .model-table td:nth-child(7) { width: 17%; }
+    .model-table td:last-child {
+      white-space: nowrap;
+    }
+    .model-table td:last-child button {
+      margin: 0 3px 3px 0;
+    }
     .model-list-wrap tbody tr {
       cursor: pointer;
     }
@@ -2746,11 +2753,9 @@ WEB_UI = r"""
         const backend = backendForModel(item.relative_path);
         const dotClass = backend?.load_state === 'ready' ? 'ready' : backend?.load_state === 'loading' ? 'loading' : backend?.load_state === 'error' ? 'error' : '';
         const state = backend ? stateLabel(backend) : 'stopped';
+        const running = Boolean(backend && (backend.running || backend.load_state === 'loading' || backend.load_state === 'ready'));
         const tr = document.createElement('tr');
         tr.className = item.relative_path === selectedModelId ? 'selected' : '';
-        tr.tabIndex = 0;
-        tr.setAttribute('role', 'button');
-        tr.setAttribute('aria-selected', item.relative_path === selectedModelId ? 'true' : 'false');
         tr.innerHTML = `
           <td class="model-cell">${escapeHtml(item.display_name || item.relative_path)}<span class="subtext">${escapeHtml(item.relative_path)}</span></td>
           <td>${escapeHtml(formatBytes(item.size_bytes))}</td>
@@ -2758,17 +2763,25 @@ WEB_UI = r"""
           <td><span class="pill ${item.mmproj_path ? 'ok' : ''}">${item.mmproj_path ? 'yes' : 'none'}</span></td>
           <td><span class="pill ${savedSettings[item.relative_path] ? 'ok' : 'warn'}">${savedSettings[item.relative_path] ? 'saved' : 'default'}</span></td>
           <td><span class="state"><span class="dot ${dotClass}"></span>${escapeHtml(state)}</span></td>
-          <td><button type="button" class="neutral compact">Configure</button></td>
+          <td>
+            <button class="compact ${running ? 'neutral' : ''}" data-action="start-model" data-model="${escapeAttr(item.relative_path)}" ${running ? 'disabled' : ''}>${running ? 'Running' : 'Start'}</button>
+            <button class="neutral compact" data-action="edit-model" data-model="${escapeAttr(item.relative_path)}">Edit</button>
+          </td>
         `;
-        tr.addEventListener('click', () => openSettings(item.relative_path));
-        tr.addEventListener('keydown', (event) => {
-          if (event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault();
-            openSettings(item.relative_path);
-          }
-        });
         modelRows.appendChild(tr);
       }
+
+      modelRows.querySelectorAll('button[data-action]').forEach((button) => {
+        button.addEventListener('click', () => {
+          const id = button.getAttribute('data-model');
+          const action = button.getAttribute('data-action');
+          if (action === 'start-model') {
+            quickStartModel(id);
+          } else if (action === 'edit-model') {
+            openSettings(id);
+          }
+        });
+      });
 
       if (selectedModelId) {
         localStorage.setItem('selectedModelId', selectedModelId);
@@ -2820,7 +2833,7 @@ WEB_UI = r"""
           const id = button.getAttribute('data-model');
           const action = button.getAttribute('data-action');
           if (action === 'start-recent') {
-            startRecentModel(id);
+            quickStartModel(id);
           } else if (action === 'edit-recent') {
             openSettings(id);
           }
@@ -2969,7 +2982,7 @@ WEB_UI = r"""
       if (ok) settingsDialog.close();
     }
 
-    async function startRecentModel(modelId) {
+    async function quickStartModel(modelId) {
       await runAction(async () => {
         const payload = {...(savedSettings[modelId] || {}), model: modelId};
         await api('/api/start', {method: 'POST', body: JSON.stringify(payload)});
