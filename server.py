@@ -2033,6 +2033,27 @@ WEB_UI = r"""
       padding: 6px 8px;
       font-size: 0.78rem;
     }
+    dialog.settings-dialog {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 0;
+      width: min(640px, 92vw);
+      max-height: 90vh;
+      overflow: auto;
+      background: var(--panel);
+      color: var(--ink);
+      box-shadow: 0 16px 48px rgba(20, 30, 26, 0.3);
+    }
+    dialog.settings-dialog::backdrop { background: rgba(20, 30, 26, 0.45); }
+    .settings-dialog-inner { padding: 18px; }
+    .settings-dialog-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin: 0 0 14px;
+    }
+    .settings-dialog-head h2 { margin: 0; overflow-wrap: anywhere; }
     .meta {
       margin: 9px 0 0;
       color: var(--muted);
@@ -2371,86 +2392,13 @@ WEB_UI = r"""
                 <th>MMProj</th>
                 <th>Saved</th>
                 <th>State</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody id="modelRows"></tbody>
           </table>
         </div>
-        <label class="check-row" for="mmproj_enabled" style="margin-top: 10px">
-          <input id="mmproj_enabled" type="checkbox" checked>
-          Use MMProj
-        </label>
-        <p class="meta" id="mmprojMeta"></p>
-        <div class="settings" style="margin-top: 12px">
-          <div class="field">
-            <label for="backend">Backend</label>
-            <select id="backend"></select>
-          </div>
-          <div class="field">
-            <label for="mode">Mode</label>
-            <select id="mode">
-              <option value="auto">auto</option>
-              <option value="chat">chat</option>
-              <option value="embeddings">embeddings</option>
-            </select>
-          </div>
-          <div class="field">
-            <label for="pooling">Pooling</label>
-            <select id="pooling">
-              <option value="auto">auto</option>
-              <option value="mean">mean</option>
-              <option value="cls">cls</option>
-              <option value="last">last</option>
-            </select>
-          </div>
-          <div class="field"><label for="ctx_size">Context</label><input id="ctx_size" type="number" placeholder="4096"></div>
-          <div class="field">
-            <label for="gpu_layers_mode">GPU Layers</label>
-            <select id="gpu_layers_mode">
-              <option value="auto">auto</option>
-              <option value="all">all</option>
-              <option value="custom">custom</option>
-            </select>
-            <input id="gpu_layers" type="number" min="0" step="1" placeholder="layers" hidden style="margin-top: 8px">
-          </div>
-          <div class="field"><label for="threads">Threads</label><input id="threads" type="number" placeholder="auto"></div>
-          <div class="field"><label for="batch_size">Batch</label><input id="batch_size" type="number" placeholder="2048"></div>
-          <div class="field"><label for="ubatch_size">UBatch</label><input id="ubatch_size" type="number" placeholder="512"></div>
-          <div class="field"><label for="parallel">Parallel</label><input id="parallel" type="number" placeholder="auto"></div>
-          <div class="field">
-            <label for="flash_attn">Flash Attention</label>
-            <select id="flash_attn">
-              <option value="auto">auto</option>
-              <option value="on">on</option>
-              <option value="off">off</option>
-            </select>
-          </div>
-          <div class="field">
-            <label for="reasoning">Reasoning</label>
-            <select id="reasoning">
-              <option value="off">off</option>
-              <option value="auto">auto</option>
-              <option value="on">on</option>
-            </select>
-          </div>
-          <div class="field">
-            <label for="reasoning_budget">Reasoning Budget</label>
-            <input id="reasoning_budget" type="number" min="-1" step="1" placeholder="-1 (unlimited)">
-          </div>
-          <div class="field">
-            <label for="reasoning_format">Reasoning Format</label>
-            <select id="reasoning_format">
-              <option value="none">none</option>
-              <option value="auto">auto</option>
-              <option value="deepseek">deepseek</option>
-              <option value="deepseek-legacy">deepseek-legacy</option>
-            </select>
-          </div>
-        </div>
         <div class="actions">
-          <button id="startBtn">Start</button>
-          <button id="restartBtn" class="secondary">Restart</button>
-          <button id="stopBtn" class="danger">Stop</button>
           <button id="refreshBtn" class="neutral">Refresh</button>
         </div>
         <p class="meta" id="modelMeta"></p>
@@ -2479,6 +2427,92 @@ WEB_UI = r"""
     </section>
   </main>
 
+  <dialog id="settingsDialog" class="settings-dialog">
+    <div class="settings-dialog-inner">
+      <div class="settings-dialog-head">
+        <h2 id="settingsTitle">Configure</h2>
+        <button type="button" id="settingsCloseBtn" class="neutral compact">Close</button>
+      </div>
+      <label class="check-row" for="mmproj_enabled">
+        <input id="mmproj_enabled" type="checkbox" checked>
+        Use MMProj
+      </label>
+      <p class="meta" id="mmprojMeta"></p>
+      <div class="settings" style="margin-top: 12px">
+        <div class="field">
+          <label for="backend">Backend</label>
+          <select id="backend"></select>
+        </div>
+        <div class="field">
+          <label for="mode">Mode</label>
+          <select id="mode">
+            <option value="auto">auto</option>
+            <option value="chat">chat</option>
+            <option value="embeddings">embeddings</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="pooling">Pooling</label>
+          <select id="pooling">
+            <option value="auto">auto</option>
+            <option value="mean">mean</option>
+            <option value="cls">cls</option>
+            <option value="last">last</option>
+          </select>
+        </div>
+        <div class="field"><label for="ctx_size">Context</label><input id="ctx_size" type="number" placeholder="4096"></div>
+        <div class="field">
+          <label for="gpu_layers_mode">GPU Layers</label>
+          <select id="gpu_layers_mode">
+            <option value="auto">auto</option>
+            <option value="all">all</option>
+            <option value="custom">custom</option>
+          </select>
+          <input id="gpu_layers" type="number" min="0" step="1" placeholder="layers" hidden style="margin-top: 8px">
+        </div>
+        <div class="field"><label for="threads">Threads</label><input id="threads" type="number" placeholder="auto"></div>
+        <div class="field"><label for="batch_size">Batch</label><input id="batch_size" type="number" placeholder="2048"></div>
+        <div class="field"><label for="ubatch_size">UBatch</label><input id="ubatch_size" type="number" placeholder="512"></div>
+        <div class="field"><label for="parallel">Parallel</label><input id="parallel" type="number" placeholder="auto"></div>
+        <div class="field">
+          <label for="flash_attn">Flash Attention</label>
+          <select id="flash_attn">
+            <option value="auto">auto</option>
+            <option value="on">on</option>
+            <option value="off">off</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="reasoning">Reasoning</label>
+          <select id="reasoning">
+            <option value="off">off</option>
+            <option value="auto">auto</option>
+            <option value="on">on</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="reasoning_budget">Reasoning Budget</label>
+          <input id="reasoning_budget" type="number" min="-1" step="1" placeholder="-1 (unlimited)">
+        </div>
+        <div class="field">
+          <label for="reasoning_format">Reasoning Format</label>
+          <select id="reasoning_format">
+            <option value="none">none</option>
+            <option value="auto">auto</option>
+            <option value="deepseek">deepseek</option>
+            <option value="deepseek-legacy">deepseek-legacy</option>
+          </select>
+        </div>
+      </div>
+      <div class="actions">
+        <button type="button" id="dialogStartBtn">Start</button>
+        <button type="button" id="dialogRestartBtn" class="secondary">Restart</button>
+        <button type="button" id="settingsCancelBtn" class="neutral">Cancel</button>
+      </div>
+      <p class="meta" id="dialogMessage"></p>
+    </div>
+  </dialog>
+
   <script>
     const apiKey = document.getElementById('apiKey');
     const statusToggle = document.getElementById('statusToggle');
@@ -2501,6 +2535,11 @@ WEB_UI = r"""
     const logStreamState = document.getElementById('logStreamState');
     const toggleLogsBtn = document.getElementById('toggleLogsBtn');
     const messageLine = document.getElementById('messageLine');
+    const settingsDialog = document.getElementById('settingsDialog');
+    const settingsTitle = document.getElementById('settingsTitle');
+    const dialogMessage = document.getElementById('dialogMessage');
+    const dialogStartBtn = document.getElementById('dialogStartBtn');
+    const dialogRestartBtn = document.getElementById('dialogRestartBtn');
     let allModels = [];
     let modelDir = '';
     let availableBackends = [];
@@ -2516,9 +2555,10 @@ WEB_UI = r"""
     apiKey.value = localStorage.getItem('proxyApiKey') || '';
     modelFilter.value = localStorage.getItem('modelFilter') || '';
 
-    document.getElementById('startBtn').addEventListener('click', () => startBackend());
-    document.getElementById('restartBtn').addEventListener('click', () => restartBackend());
-    document.getElementById('stopBtn').addEventListener('click', () => stopBackend(selectedModelId));
+    dialogStartBtn.addEventListener('click', () => startFromDialog());
+    dialogRestartBtn.addEventListener('click', () => restartFromDialog());
+    document.getElementById('settingsCancelBtn').addEventListener('click', () => settingsDialog.close());
+    document.getElementById('settingsCloseBtn').addEventListener('click', () => settingsDialog.close());
     document.getElementById('stopAllBtn').addEventListener('click', () => stopAllBackends());
     document.getElementById('refreshBtn').addEventListener('click', () => refreshAll());
     document.getElementById('clearLogsBtn').addEventListener('click', () => clearLogs());
@@ -2699,7 +2739,7 @@ WEB_UI = r"""
       modelRows.innerHTML = '';
       if (!filtered.length) {
         const tr = document.createElement('tr');
-        tr.innerHTML = '<td colspan="6" style="color: var(--muted)">No matching GGUF files.</td>';
+        tr.innerHTML = '<td colspan="7" style="color: var(--muted)">No matching GGUF files.</td>';
         modelRows.appendChild(tr);
       }
       for (const item of filtered) {
@@ -2718,12 +2758,13 @@ WEB_UI = r"""
           <td><span class="pill ${item.mmproj_path ? 'ok' : ''}">${item.mmproj_path ? 'yes' : 'none'}</span></td>
           <td><span class="pill ${savedSettings[item.relative_path] ? 'ok' : 'warn'}">${savedSettings[item.relative_path] ? 'saved' : 'default'}</span></td>
           <td><span class="state"><span class="dot ${dotClass}"></span>${escapeHtml(state)}</span></td>
+          <td><button type="button" class="neutral compact">Configure</button></td>
         `;
-        tr.addEventListener('click', () => selectModel(item.relative_path));
+        tr.addEventListener('click', () => openSettings(item.relative_path));
         tr.addEventListener('keydown', (event) => {
           if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault();
-            selectModel(item.relative_path);
+            openSettings(item.relative_path);
           }
         });
         modelRows.appendChild(tr);
@@ -2768,7 +2809,7 @@ WEB_UI = r"""
           <td>${stateHtml}</td>
           <td>
             <button class="compact ${running ? 'neutral' : ''}" data-action="start-recent" data-model="${escapeAttr(modelId)}" ${startDisabled ? 'disabled' : ''}>${running ? 'Running' : 'Start'}</button>
-            <button class="neutral compact" data-action="select-recent" data-model="${escapeAttr(modelId)}" ${selectDisabled ? 'disabled' : ''}>Select</button>
+            <button class="neutral compact" data-action="edit-recent" data-model="${escapeAttr(modelId)}" ${selectDisabled ? 'disabled' : ''}>Edit</button>
           </td>
         `;
         recentRows.appendChild(tr);
@@ -2780,18 +2821,31 @@ WEB_UI = r"""
           const action = button.getAttribute('data-action');
           if (action === 'start-recent') {
             startRecentModel(id);
-          } else if (action === 'select-recent') {
-            selectModel(id);
+          } else if (action === 'edit-recent') {
+            openSettings(id);
           }
         });
       });
     }
 
-    function selectModel(modelId) {
+    function openSettings(modelId) {
+      if (!modelId) return;
       selectedModelId = modelId;
       localStorage.setItem('selectedModelId', selectedModelId);
-      renderModels();
       applySelectedModelSettings();
+      renderModels({applySettings: false});
+      const item = modelItem(modelId);
+      settingsTitle.textContent = `Configure: ${item?.display_name || modelId}`;
+      dialogMessage.textContent = '';
+      updateDialogActions(modelId);
+      if (!settingsDialog.open) settingsDialog.showModal();
+    }
+
+    function updateDialogActions(modelId) {
+      const backend = backendForModel(modelId);
+      const running = Boolean(backend && (backend.running || backend.load_state === 'loading' || backend.load_state === 'ready'));
+      dialogStartBtn.disabled = running;
+      dialogStartBtn.title = running ? 'Already running. Use Restart to apply changes.' : '';
     }
 
     function backendForModel(modelId) {
@@ -2857,6 +2911,7 @@ WEB_UI = r"""
           <td>${uptime}</td>
           <td>
             <button class="neutral compact" data-action="logs" data-model="${escapeAttr(backend.model_id)}">Logs</button>
+            <button class="neutral compact" data-action="edit" data-model="${escapeAttr(backend.model_id)}">Edit</button>
             <button class="secondary compact" data-action="restart" data-model="${escapeAttr(backend.model_id)}">Restart</button>
             <button class="danger compact" data-action="stop" data-model="${escapeAttr(backend.model_id)}">Stop</button>
           </td>
@@ -2870,6 +2925,8 @@ WEB_UI = r"""
           if (action === 'logs') {
             logModel.value = id;
             connectLogStream();
+          } else if (action === 'edit') {
+            openSettings(id);
           } else if (action === 'stop') {
             stopBackend(id);
           } else if (action === 'restart') {
@@ -2898,10 +2955,18 @@ WEB_UI = r"""
       renderStatus(data);
     }
 
-    async function startBackend() {
-      await runAction(async () => {
+    async function startFromDialog() {
+      const ok = await runAction(async () => {
         await api('/api/start', {method: 'POST', body: JSON.stringify(settings())});
-      }, 'started');
+      }, 'started', {messageEl: dialogMessage});
+      if (ok) settingsDialog.close();
+    }
+
+    async function restartFromDialog() {
+      const ok = await runAction(async () => {
+        await api('/api/restart', {method: 'POST', body: JSON.stringify(settings())});
+      }, 'restarted', {messageEl: dialogMessage});
+      if (ok) settingsDialog.close();
     }
 
     async function startRecentModel(modelId) {
@@ -2911,16 +2976,9 @@ WEB_UI = r"""
       }, 'started');
     }
 
-    async function restartBackend() {
-      await runAction(async () => {
-        await api('/api/restart', {method: 'POST', body: JSON.stringify(settings())});
-      }, 'restarted');
-    }
-
     async function restartModel(modelId) {
       await runAction(async () => {
-        const item = allModels.find((entry) => entry.relative_path === modelId);
-        const payload = item && selectedModelId === modelId ? settings() : {...(savedSettings[modelId] || {}), model: modelId};
+        const payload = {...(savedSettings[modelId] || {}), model: modelId};
         await api('/api/restart', {method: 'POST', body: JSON.stringify(payload)});
       }, 'restarted');
     }
@@ -2938,16 +2996,18 @@ WEB_UI = r"""
       }, 'stopped all');
     }
 
-    async function runAction(action, label) {
+    async function runAction(action, label, {messageEl = messageLine} = {}) {
       try {
-        messageLine.textContent = 'working...';
+        messageEl.textContent = 'working...';
         await action();
-        messageLine.textContent = label;
+        messageEl.textContent = label;
         await loadModels(false);
         await loadStatus();
         scheduleLogReconnect();
+        return true;
       } catch (err) {
-        messageLine.textContent = String(err);
+        messageEl.textContent = String(err);
+        return false;
       }
     }
 
