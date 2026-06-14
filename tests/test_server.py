@@ -334,6 +334,10 @@ class WebUiTests(unittest.TestCase):
         self.assertIn(".settings-dialog", stylesheet.text)
         self.assertEqual(script.status_code, 200)
         self.assertIn("function connectLogStream()", script.text)
+        self.assertIn("function updateModelRow(", script.text)
+        self.assertNotIn("modelRows.innerHTML", script.text)
+        self.assertNotIn("recentRows.innerHTML", script.text)
+        self.assertNotIn("backendRows.innerHTML", script.text)
         self.assertIn("setInterval(loadStatus, 5000)", script.text)
 
 

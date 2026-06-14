@@ -2,6 +2,7 @@ const apiKey = document.getElementById('apiKey');
 const statusToggle = document.getElementById('statusToggle');
 const proxyStatusDot = document.getElementById('proxyStatusDot');
 const statusJson = document.getElementById('statusJson');
+const backendRows = document.getElementById('backendRows');
 const recentRows = document.getElementById('recentRows');
 const modelRows = document.getElementById('modelRows');
 const modelFilter = document.getElementById('modelFilter');
@@ -59,6 +60,45 @@ modelFilter.addEventListener('input', () => {
 modeInput.addEventListener('change', () => updatePoolingControl());
 gpuLayersMode.addEventListener('change', () => updateGpuLayersInput(true));
 logModel.addEventListener('change', () => connectLogStream());
+backendRows.addEventListener('click', (event) => {
+  const button = event.target.closest('button[data-action]');
+  const modelId = button?.closest('tr[data-model-id]')?.dataset.modelId;
+  if (!button || !modelId) return;
+
+  const action = button.dataset.action;
+  if (action === 'logs') {
+    logModel.value = modelId;
+    connectLogStream();
+  } else if (action === 'edit') {
+    openSettings(modelId);
+  } else if (action === 'stop') {
+    stopBackend(modelId);
+  } else if (action === 'restart') {
+    restartModel(modelId);
+  }
+});
+recentRows.addEventListener('click', (event) => {
+  const button = event.target.closest('button[data-action]');
+  const modelId = button?.closest('tr[data-model-id]')?.dataset.modelId;
+  if (!button || !modelId) return;
+
+  if (button.dataset.action === 'start-recent') {
+    quickStartModel(modelId);
+  } else if (button.dataset.action === 'edit-recent') {
+    openSettings(modelId);
+  }
+});
+modelRows.addEventListener('click', (event) => {
+  const button = event.target.closest('button[data-action]');
+  const modelId = button?.closest('tr[data-model-id]')?.dataset.modelId;
+  if (!button || !modelId) return;
+
+  if (button.dataset.action === 'start-model') {
+    quickStartModel(modelId);
+  } else if (button.dataset.action === 'edit-model') {
+    openSettings(modelId);
+  }
+});
 document.addEventListener('click', (event) => {
   if (!statusJson.hidden && !event.target.closest('.status-menu')) {
     setStatusJsonOpen(false);
@@ -208,6 +248,130 @@ function modelItem(modelId) {
   return allModels.find((item) => item.relative_path === modelId);
 }
 
+function setText(element, value) {
+  const next = String(value ?? '');
+  if (element.textContent !== next) element.textContent = next;
+}
+
+function setClassName(element, value) {
+  if (element.className !== value) element.className = value;
+}
+
+function setButtonState(button, {disabled, label, neutral = false}) {
+  button.disabled = disabled;
+  button.classList.toggle('neutral', neutral);
+  setText(button, label);
+}
+
+function rowByModelId(rows, modelId) {
+  return [...rows.children].find((row) => row.dataset.modelId === modelId);
+}
+
+function removeUnusedRows(rows, modelIds) {
+  const keep = new Set(modelIds);
+  for (const row of [...rows.querySelectorAll('tr[data-model-id]')]) {
+    if (!keep.has(row.dataset.modelId)) row.remove();
+  }
+}
+
+function placeRowAt(rows, row, index) {
+  const current = rows.children[index];
+  if (current !== row) rows.insertBefore(row, current || null);
+}
+
+function setEmptyRow(rows, colspan, message) {
+  let row = rows.querySelector('tr[data-empty-row]');
+  if (!row) {
+    row = document.createElement('tr');
+    row.dataset.emptyRow = 'true';
+    const cell = document.createElement('td');
+    cell.colSpan = colspan;
+    cell.style.color = 'var(--muted)';
+    row.appendChild(cell);
+    rows.appendChild(row);
+  }
+  setText(row.firstElementChild, message);
+}
+
+function removeEmptyRow(rows) {
+  rows.querySelector('tr[data-empty-row]')?.remove();
+}
+
+function createStateContent(cell) {
+  const state = document.createElement('span');
+  state.className = 'state';
+  state.dataset.field = 'state-wrap';
+  const dot = document.createElement('span');
+  dot.className = 'dot';
+  dot.dataset.field = 'state-dot';
+  const label = document.createElement('span');
+  label.dataset.field = 'state-label';
+  state.append(dot, label);
+  cell.appendChild(state);
+}
+
+function updateStateContent(cell, backend, fallback = 'stopped') {
+  const state = cell.querySelector('[data-field="state-wrap"]');
+  const dot = cell.querySelector('[data-field="state-dot"]');
+  const label = cell.querySelector('[data-field="state-label"]');
+  const dotClass = backend?.load_state === 'ready'
+    ? 'ready'
+    : backend?.load_state === 'loading'
+      ? 'loading'
+      : backend?.load_state === 'error'
+        ? 'error'
+        : '';
+  setClassName(state, 'state');
+  setClassName(dot, `dot ${dotClass}`.trim());
+  dot.hidden = false;
+  setText(label, backend ? stateLabel(backend) : fallback);
+}
+
+function createModelRow(item) {
+  const row = document.createElement('tr');
+  row.dataset.modelId = item.relative_path;
+  row.innerHTML = `
+    <td class="model-cell"><span data-field="display-name"></span><span class="subtext" data-field="path"></span></td>
+    <td data-field="size"></td>
+    <td><span class="pill" data-field="mode"></span><span class="subtext" data-field="architecture"></span></td>
+    <td><span class="pill" data-field="mmproj"></span></td>
+    <td><span class="pill" data-field="saved"></span></td>
+    <td data-field="state"></td>
+    <td>
+      <button class="compact" data-action="start-model"></button>
+      <button class="neutral compact" data-action="edit-model">Edit</button>
+    </td>
+  `;
+  createStateContent(row.querySelector('[data-field="state"]'));
+  return row;
+}
+
+function updateModelRow(row, item) {
+  const backend = backendForModel(item.relative_path);
+  const running = Boolean(backend && (backend.running || backend.load_state === 'loading' || backend.load_state === 'ready'));
+  const mode = row.querySelector('[data-field="mode"]');
+  const mmproj = row.querySelector('[data-field="mmproj"]');
+  const saved = row.querySelector('[data-field="saved"]');
+
+  row.classList.toggle('selected', item.relative_path === selectedModelId);
+  setText(row.querySelector('[data-field="display-name"]'), item.display_name || item.relative_path);
+  setText(row.querySelector('[data-field="path"]'), item.relative_path);
+  setText(row.querySelector('[data-field="size"]'), formatBytes(item.size_bytes));
+  setClassName(mode, `pill ${item.effective_mode === 'embeddings' ? 'ok' : item.effective_mode === 'rerank' ? 'warn' : ''}`.trim());
+  setText(mode, item.effective_mode || 'chat');
+  setText(row.querySelector('[data-field="architecture"]'), `${item.architecture || 'unknown'}${item.effective_pooling ? ` / ${item.effective_pooling}` : ''}`);
+  setClassName(mmproj, `pill ${item.mmproj_path ? 'ok' : ''}`.trim());
+  setText(mmproj, item.mmproj_path ? 'yes' : 'none');
+  setClassName(saved, `pill ${savedSettings[item.relative_path] ? 'ok' : 'warn'}`);
+  setText(saved, savedSettings[item.relative_path] ? 'saved' : 'default');
+  updateStateContent(row.querySelector('[data-field="state"]'), backend);
+  setButtonState(row.querySelector('[data-action="start-model"]'), {
+    disabled: running,
+    label: running ? 'Running' : 'Start',
+    neutral: running,
+  });
+}
+
 function renderModels(options = {}) {
   const previous = selectedModelId;
   const query = modelFilter.value.trim().toLowerCase();
@@ -220,45 +384,19 @@ function renderModels(options = {}) {
     selectedModelId = filtered[0]?.relative_path || allModels[0]?.relative_path || '';
   }
 
-  modelRows.innerHTML = '';
   if (!filtered.length) {
-    const tr = document.createElement('tr');
-    tr.innerHTML = '<td colspan="7" style="color: var(--muted)">No matching GGUF files.</td>';
-    modelRows.appendChild(tr);
-  }
-  for (const item of filtered) {
-    const backend = backendForModel(item.relative_path);
-    const dotClass = backend?.load_state === 'ready' ? 'ready' : backend?.load_state === 'loading' ? 'loading' : backend?.load_state === 'error' ? 'error' : '';
-    const state = backend ? stateLabel(backend) : 'stopped';
-    const running = Boolean(backend && (backend.running || backend.load_state === 'loading' || backend.load_state === 'ready'));
-    const tr = document.createElement('tr');
-    tr.className = item.relative_path === selectedModelId ? 'selected' : '';
-    tr.innerHTML = `
-      <td class="model-cell">${escapeHtml(item.display_name || item.relative_path)}<span class="subtext">${escapeHtml(item.relative_path)}</span></td>
-      <td>${escapeHtml(formatBytes(item.size_bytes))}</td>
-      <td><span class="pill ${item.effective_mode === 'embeddings' ? 'ok' : item.effective_mode === 'rerank' ? 'warn' : ''}">${escapeHtml(item.effective_mode || 'chat')}</span><span class="subtext">${escapeHtml(item.architecture || 'unknown')}${item.effective_pooling ? ` / ${escapeHtml(item.effective_pooling)}` : ''}</span></td>
-      <td><span class="pill ${item.mmproj_path ? 'ok' : ''}">${item.mmproj_path ? 'yes' : 'none'}</span></td>
-      <td><span class="pill ${savedSettings[item.relative_path] ? 'ok' : 'warn'}">${savedSettings[item.relative_path] ? 'saved' : 'default'}</span></td>
-      <td><span class="state"><span class="dot ${dotClass}"></span>${escapeHtml(state)}</span></td>
-      <td>
-        <button class="compact ${running ? 'neutral' : ''}" data-action="start-model" data-model="${escapeAttr(item.relative_path)}" ${running ? 'disabled' : ''}>${running ? 'Running' : 'Start'}</button>
-        <button class="neutral compact" data-action="edit-model" data-model="${escapeAttr(item.relative_path)}">Edit</button>
-      </td>
-    `;
-    modelRows.appendChild(tr);
-  }
-
-  modelRows.querySelectorAll('button[data-action]').forEach((button) => {
-    button.addEventListener('click', () => {
-      const id = button.getAttribute('data-model');
-      const action = button.getAttribute('data-action');
-      if (action === 'start-model') {
-        quickStartModel(id);
-      } else if (action === 'edit-model') {
-        openSettings(id);
-      }
+    removeUnusedRows(modelRows, []);
+    setEmptyRow(modelRows, 7, 'No matching GGUF files.');
+  } else {
+    removeEmptyRow(modelRows);
+    const modelIds = filtered.map((item) => item.relative_path);
+    removeUnusedRows(modelRows, modelIds);
+    filtered.forEach((item, index) => {
+      const row = rowByModelId(modelRows, item.relative_path) || createModelRow(item);
+      updateModelRow(row, item);
+      placeRowAt(modelRows, row, index);
     });
-  });
+  }
 
   if (selectedModelId) {
     localStorage.setItem('selectedModelId', selectedModelId);
@@ -267,54 +405,68 @@ function renderModels(options = {}) {
     applySelectedModelSettings();
   }
   const selected = selectedModel();
-  document.getElementById('modelMeta').textContent =
-    `${filtered.length} / ${allModels.length} GGUF files under ${modelDir}; selected: ${selected ? (selected.display_name || selected.relative_path) : 'none'}`;
+  setText(
+    document.getElementById('modelMeta'),
+    `${filtered.length} / ${allModels.length} GGUF files under ${modelDir}; selected: ${selected ? (selected.display_name || selected.relative_path) : 'none'}`,
+  );
+}
+
+function createRecentModelRow(modelId) {
+  const row = document.createElement('tr');
+  row.dataset.modelId = modelId;
+  row.innerHTML = `
+    <td class="model-cell"><span data-field="display-name"></span><span class="subtext" data-field="details"></span></td>
+    <td data-field="state"></td>
+    <td>
+      <button class="compact" data-action="start-recent"></button>
+      <button class="neutral compact" data-action="edit-recent">Edit</button>
+    </td>
+  `;
+  createStateContent(row.querySelector('[data-field="state"]'));
+  return row;
+}
+
+function updateRecentModelRow(row, modelId) {
+  const item = modelItem(modelId);
+  const backend = backendForModel(modelId);
+  const missing = !item;
+  const running = Boolean(backend && (backend.running || backend.load_state === 'loading' || backend.load_state === 'ready'));
+  const savedBackend = savedSettings[modelId]?.backend || defaultBackend;
+  const stateCell = row.querySelector('[data-field="state"]');
+  const state = stateCell.querySelector('[data-field="state-wrap"]');
+  const dot = stateCell.querySelector('[data-field="state-dot"]');
+
+  setText(row.querySelector('[data-field="display-name"]'), item?.display_name || modelId);
+  setText(row.querySelector('[data-field="details"]'), `${modelId} / ${backendName(savedBackend)}`);
+  if (missing) {
+    setClassName(state, 'pill missing');
+    dot.hidden = true;
+    setText(stateCell.querySelector('[data-field="state-label"]'), 'missing');
+  } else {
+    updateStateContent(stateCell, backend);
+  }
+  setButtonState(row.querySelector('[data-action="start-recent"]'), {
+    disabled: missing || running,
+    label: running ? 'Running' : 'Start',
+    neutral: running,
+  });
+  row.querySelector('[data-action="edit-recent"]').disabled = missing;
 }
 
 function renderRecentModels() {
-  recentRows.innerHTML = '';
-  if (!recentModels.length) {
-    const tr = document.createElement('tr');
-    tr.innerHTML = '<td colspan="3" style="color: var(--muted)">No recent models yet.</td>';
-    recentRows.appendChild(tr);
+  const modelIds = recentModels.slice(0, 5);
+  if (!modelIds.length) {
+    removeUnusedRows(recentRows, []);
+    setEmptyRow(recentRows, 3, 'No recent models yet.');
     return;
   }
 
-  for (const modelId of recentModels.slice(0, 5)) {
-    const item = modelItem(modelId);
-    const backend = backendForModel(modelId);
-    const missing = !item;
-    const running = Boolean(backend && (backend.running || backend.load_state === 'loading' || backend.load_state === 'ready'));
-    const dotClass = backend?.load_state === 'ready' ? 'ready' : backend?.load_state === 'loading' ? 'loading' : backend?.load_state === 'error' ? 'error' : '';
-    const state = missing ? 'missing' : backend ? stateLabel(backend) : 'stopped';
-    const stateHtml = missing
-      ? '<span class="pill missing">missing</span>'
-      : `<span class="state"><span class="dot ${dotClass}"></span>${escapeHtml(state)}</span>`;
-    const startDisabled = missing || running;
-    const selectDisabled = missing;
-    const tr = document.createElement('tr');
-    const savedBackend = savedSettings[modelId]?.backend || defaultBackend;
-    tr.innerHTML = `
-      <td class="model-cell">${escapeHtml(item?.display_name || modelId)}<span class="subtext">${escapeHtml(modelId)} / ${escapeHtml(backendName(savedBackend))}</span></td>
-      <td>${stateHtml}</td>
-      <td>
-        <button class="compact ${running ? 'neutral' : ''}" data-action="start-recent" data-model="${escapeAttr(modelId)}" ${startDisabled ? 'disabled' : ''}>${running ? 'Running' : 'Start'}</button>
-        <button class="neutral compact" data-action="edit-recent" data-model="${escapeAttr(modelId)}" ${selectDisabled ? 'disabled' : ''}>Edit</button>
-      </td>
-    `;
-    recentRows.appendChild(tr);
-  }
-
-  recentRows.querySelectorAll('button[data-action]').forEach((button) => {
-    button.addEventListener('click', () => {
-      const id = button.getAttribute('data-model');
-      const action = button.getAttribute('data-action');
-      if (action === 'start-recent') {
-        quickStartModel(id);
-      } else if (action === 'edit-recent') {
-        openSettings(id);
-      }
-    });
+  removeEmptyRow(recentRows);
+  removeUnusedRows(recentRows, modelIds);
+  modelIds.forEach((modelId, index) => {
+    const row = rowByModelId(recentRows, modelId) || createRecentModelRow(modelId);
+    updateRecentModelRow(row, modelId);
+    placeRowAt(recentRows, row, index);
   });
 }
 
@@ -368,72 +520,81 @@ function setStatusJsonOpen(open) {
 
 function renderStatus(data) {
   statusData = data;
-  statusJson.textContent = JSON.stringify(data, null, 2);
+  setText(statusJson, JSON.stringify(data, null, 2));
   proxyStatusDot.className = `dot ${data.running ? 'ready' : ''}`;
-  document.getElementById('activeCount').textContent = String(data.count || 0);
-  document.getElementById('latestModel').textContent = data.latest_model_id ? modelName(data.latest_model_id) : 'none';
-  document.getElementById('startPort').textContent = String(data.backend_start_port ?? '-');
+  setText(document.getElementById('activeCount'), data.count || 0);
+  setText(document.getElementById('latestModel'), data.latest_model_id ? modelName(data.latest_model_id) : 'none');
+  setText(document.getElementById('startPort'), data.backend_start_port ?? '-');
   renderBackends(data.backends || []);
   renderLogOptions(data.backends || []);
   renderRecentModels();
   renderModels({applySettings: false});
 }
 
+function createBackendRow(modelId) {
+  const row = document.createElement('tr');
+  row.dataset.modelId = modelId;
+  row.innerHTML = `
+    <td class="model-cell" data-field="model"></td>
+    <td><span class="pill" data-field="backend"></span></td>
+    <td><span class="pill" data-field="mode"></span><span class="subtext" data-field="pooling"></span></td>
+    <td data-field="state"></td>
+    <td data-field="port"></td>
+    <td data-field="uptime"></td>
+    <td>
+      <button class="neutral compact" data-action="logs">Logs</button>
+      <button class="neutral compact" data-action="edit">Edit</button>
+      <button class="secondary compact" data-action="restart">Restart</button>
+      <button class="danger compact" data-action="stop">Stop</button>
+    </td>
+  `;
+  createStateContent(row.querySelector('[data-field="state"]'));
+  return row;
+}
+
+function updateBackendRow(row, backend) {
+  const mode = row.querySelector('[data-field="mode"]');
+  setText(row.querySelector('[data-field="model"]'), modelName(backend.model_id));
+  setText(row.querySelector('[data-field="backend"]'), backendName(backend.backend || defaultBackend));
+  setClassName(mode, `pill ${backend.effective_mode === 'embeddings' ? 'ok' : ''}`.trim());
+  setText(mode, backend.effective_mode || 'chat');
+  setText(row.querySelector('[data-field="pooling"]'), backend.effective_pooling || '');
+  updateStateContent(row.querySelector('[data-field="state"]'), backend);
+  setText(row.querySelector('[data-field="port"]'), backend.port ?? '-');
+  setText(row.querySelector('[data-field="uptime"]'), backend.uptime_seconds == null ? '-' : `${backend.uptime_seconds}s`);
+}
+
 function renderBackends(backends) {
-  const rows = document.getElementById('backendRows');
-  rows.innerHTML = '';
   if (!backends.length) {
-    const tr = document.createElement('tr');
-    tr.innerHTML = '<td colspan="7" style="color: var(--muted)">No models have been started.</td>';
-    rows.appendChild(tr);
+    removeUnusedRows(backendRows, []);
+    setEmptyRow(backendRows, 7, 'No models have been started.');
     return;
   }
-  for (const backend of backends) {
-    const tr = document.createElement('tr');
-    const dotClass = backend.load_state === 'ready' ? 'ready' : backend.load_state === 'loading' ? 'loading' : backend.load_state === 'error' ? 'error' : '';
-    const uptime = backend.uptime_seconds == null ? '-' : `${backend.uptime_seconds}s`;
-    tr.innerHTML = `
-      <td class="model-cell">${escapeHtml(modelName(backend.model_id))}</td>
-      <td><span class="pill">${escapeHtml(backendName(backend.backend || defaultBackend))}</span></td>
-      <td><span class="pill ${backend.effective_mode === 'embeddings' ? 'ok' : ''}">${escapeHtml(backend.effective_mode || 'chat')}</span>${backend.effective_pooling ? `<span class="subtext">${escapeHtml(backend.effective_pooling)}</span>` : ''}</td>
-      <td><span class="state"><span class="dot ${dotClass}"></span>${escapeHtml(stateLabel(backend))}</span></td>
-      <td>${backend.port ?? '-'}</td>
-      <td>${uptime}</td>
-      <td>
-        <button class="neutral compact" data-action="logs" data-model="${escapeAttr(backend.model_id)}">Logs</button>
-        <button class="neutral compact" data-action="edit" data-model="${escapeAttr(backend.model_id)}">Edit</button>
-        <button class="secondary compact" data-action="restart" data-model="${escapeAttr(backend.model_id)}">Restart</button>
-        <button class="danger compact" data-action="stop" data-model="${escapeAttr(backend.model_id)}">Stop</button>
-      </td>
-    `;
-    rows.appendChild(tr);
-  }
-  rows.querySelectorAll('button[data-action]').forEach((button) => {
-    button.addEventListener('click', () => {
-      const id = button.getAttribute('data-model');
-      const action = button.getAttribute('data-action');
-      if (action === 'logs') {
-        logModel.value = id;
-        connectLogStream();
-      } else if (action === 'edit') {
-        openSettings(id);
-      } else if (action === 'stop') {
-        stopBackend(id);
-      } else if (action === 'restart') {
-        restartModel(id);
-      }
-    });
+
+  removeEmptyRow(backendRows);
+  const modelIds = backends.map((backend) => backend.model_id);
+  removeUnusedRows(backendRows, modelIds);
+  backends.forEach((backend, index) => {
+    const row = rowByModelId(backendRows, backend.model_id) || createBackendRow(backend.model_id);
+    updateBackendRow(row, backend);
+    placeRowAt(backendRows, row, index);
   });
 }
 
 function renderLogOptions(backends) {
   const previous = logModel.value;
-  logModel.innerHTML = '<option value="">All models</option>';
+  const modelIds = new Set(backends.map((backend) => backend.model_id));
+  for (const option of [...logModel.options]) {
+    if (option.value && !modelIds.has(option.value)) option.remove();
+  }
   for (const backend of backends) {
-    const opt = document.createElement('option');
-    opt.value = backend.model_id;
-    opt.textContent = modelName(backend.model_id);
-    logModel.appendChild(opt);
+    let option = [...logModel.options].find((item) => item.value === backend.model_id);
+    if (!option) {
+      option = document.createElement('option');
+      option.value = backend.model_id;
+      logModel.appendChild(option);
+    }
+    setText(option, modelName(backend.model_id));
   }
   if ([...logModel.options].some((opt) => opt.value === previous)) {
     logModel.value = previous;
@@ -564,20 +725,6 @@ function connectLogStream() {
 function scheduleLogReconnect() {
   clearTimeout(logReconnectTimer);
   logReconnectTimer = setTimeout(connectLogStream, 250);
-}
-
-function escapeHtml(value) {
-  return String(value ?? '').replace(/[&<>"']/g, (char) => ({
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#39;',
-  }[char]));
-}
-
-function escapeAttr(value) {
-  return escapeHtml(value).replace(/`/g, '&#96;');
 }
 
 updateGpuLayersInput();
