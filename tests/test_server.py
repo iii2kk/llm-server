@@ -44,6 +44,13 @@ def write_gguf(path: Path, fields: list[tuple[str, int, object]]) -> None:
                 value_bytes = str(value).encode()
                 handle.write(struct.pack("<Q", len(value_bytes)))
                 handle.write(value_bytes)
+            elif value_type == 9:
+                handle.write(struct.pack("<I", 8))
+                handle.write(struct.pack("<Q", len(value)))
+                for item in value:
+                    value_bytes = str(item).encode()
+                    handle.write(struct.pack("<Q", len(value_bytes)))
+                    handle.write(value_bytes)
             elif value_type == 4:
                 handle.write(struct.pack("<I", int(value)))
             else:
@@ -119,6 +126,37 @@ class GgufMetadataTests(unittest.TestCase):
         os.utime(model, None)
         second = server.read_gguf_metadata(model)
         self.assertEqual(second["detected_mode"], "embeddings")
+
+    def test_mtp_metadata(self) -> None:
+        model = self.root / "mtp.gguf"
+        write_gguf(
+            model,
+            [
+                ("general.architecture", 8, "qwen35"),
+                ("qwen35.nextn_predict_layers", 4, 1),
+            ],
+        )
+
+        metadata = server.read_gguf_metadata(model)
+
+        self.assertTrue(metadata["mtp_supported"])
+        self.assertEqual(metadata["mtp_layers"], 1)
+
+    def test_mtp_metadata_after_tokenizer_tokens(self) -> None:
+        model = self.root / "mtp-after-tokenizer.gguf"
+        write_gguf(
+            model,
+            [
+                ("general.architecture", 8, "qwen35"),
+                ("tokenizer.ggml.tokens", 9, ["a", "b"]),
+                ("qwen35.nextn_predict_layers", 4, 1),
+            ],
+        )
+
+        metadata = server.read_gguf_metadata(model)
+
+        self.assertTrue(metadata["mtp_supported"])
+        self.assertEqual(metadata["mtp_layers"], 1)
 
 
 class BackendSettingsTests(unittest.TestCase):
@@ -209,6 +247,93 @@ class BackendSettingsTests(unittest.TestCase):
                 port=9999,
                 llama_bin_dir=fake_bin_dir,
             )
+
+    def test_mtp_auto_detection_adds_speculative_flags(self) -> None:
+        model = self.root / "mtp.gguf"
+        write_gguf(
+            model,
+            [
+                ("general.architecture", 8, "qwen35"),
+                ("qwen35.nextn_predict_layers", 4, 1),
+            ],
+        )
+        settings = server.normalize_backend_settings(
+            "mtp.gguf",
+            model,
+            {"mtp": "auto", "mtp_draft_tokens": 4},
+        )
+        self.assertTrue(settings["effective_mtp"])
+
+        fake_bin_dir = self.root / "mtp-bin"
+        fake_bin_dir.mkdir()
+        llama_server = fake_bin_dir / "llama-server"
+        llama_server.write_text("#!/bin/sh\n", encoding="ascii")
+        llama_server.chmod(0o755)
+
+        command = server.build_llama_command(
+            settings,
+            model=model,
+            port=9999,
+            llama_bin_dir=fake_bin_dir,
+        )
+
+        self.assertEqual(command[command.index("--spec-type") + 1], "draft-mtp")
+        self.assertEqual(command[command.index("--spec-draft-n-max") + 1], "4")
+
+    def test_mtp_off_does_not_add_speculative_flags(self) -> None:
+        model = self.root / "mtp-off.gguf"
+        write_gguf(
+            model,
+            [
+                ("general.architecture", 8, "qwen35"),
+                ("qwen35.nextn_predict_layers", 4, 1),
+            ],
+        )
+        settings = server.normalize_backend_settings("mtp-off.gguf", model, {"mtp": "off"})
+        self.assertFalse(settings["effective_mtp"])
+
+        fake_bin_dir = self.root / "mtp-off-bin"
+        fake_bin_dir.mkdir()
+        llama_server = fake_bin_dir / "llama-server"
+        llama_server.write_text("#!/bin/sh\n", encoding="ascii")
+        llama_server.chmod(0o755)
+
+        command = server.build_llama_command(
+            settings,
+            model=model,
+            port=9999,
+            llama_bin_dir=fake_bin_dir,
+        )
+
+        self.assertNotIn("--spec-type", command)
+
+    def test_mtp_on_requires_mtp_metadata(self) -> None:
+        model = self.root / "chat.gguf"
+        write_gguf(model, [("general.architecture", 8, "llama")])
+        with self.assertRaisesRegex(ValueError, "no nextn_predict_layers"):
+            server.normalize_backend_settings(
+                "chat.gguf",
+                model,
+                {"mtp": "on"},
+            )
+
+    def test_mtp_draft_tokens_must_be_positive_integer(self) -> None:
+        model = self.root / "mtp-invalid.gguf"
+        write_gguf(
+            model,
+            [
+                ("general.architecture", 8, "qwen35"),
+                ("qwen35.nextn_predict_layers", 4, 1),
+            ],
+        )
+        for value in (0, -1, 1.5, True, "x"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "mtp_draft_tokens"):
+                    server.normalize_backend_settings(
+                        "mtp-invalid.gguf",
+                        model,
+                        {"mtp_draft_tokens": value},
+                    )
 
     def test_backend_selection_is_normalized_and_validated(self) -> None:
         with patch.object(
@@ -330,11 +455,14 @@ class WebUiTests(unittest.TestCase):
         self.assertIn('src="/static/app.js"', index.text)
         self.assertIn('id="settingsDialog"', index.text)
         self.assertIn('id="modelRows"', index.text)
+        self.assertIn('id="mtp"', index.text)
+        self.assertIn('id="mtp_draft_tokens"', index.text)
         self.assertEqual(stylesheet.status_code, 200)
         self.assertIn(".settings-dialog", stylesheet.text)
         self.assertEqual(script.status_code, 200)
         self.assertIn("function connectLogStream()", script.text)
         self.assertIn("function updateModelRow(", script.text)
+        self.assertIn("function updateMtpControl()", script.text)
         self.assertNotIn("modelRows.innerHTML", script.text)
         self.assertNotIn("recentRows.innerHTML", script.text)
         self.assertNotIn("backendRows.innerHTML", script.text)

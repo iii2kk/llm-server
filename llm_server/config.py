@@ -60,6 +60,8 @@ SAVED_BACKEND_SETTING_KEYS = (
     "ubatch_size",
     "parallel",
     "flash_attn",
+    "mtp",
+    "mtp_draft_tokens",
     "reasoning",
     "reasoning_budget",
     "reasoning_format",
@@ -68,6 +70,7 @@ SAVED_BACKEND_SETTING_KEYS = (
 )
 MODEL_MODES = ("auto", "chat", "embeddings")
 POOLING_TYPES = ("auto", "mean", "cls", "last")
+MTP_MODES = ("auto", "on", "off")
 BACKEND_LABELS = {
     "vulkan": "Vulkan",
     "rocm": "ROCm (HIP)",

@@ -83,6 +83,7 @@
                 <th>Size</th>
                 <th>Mode</th>
                 <th>MMProj</th>
+                <th>MTP</th>
                 <th>Saved</th>
                 <th>State</th>
                 <th>Actions</th>
@@ -167,6 +168,19 @@
         <div class="field"><label for="batch_size">Batch</label><input id="batch_size" type="number" placeholder="2048"></div>
         <div class="field"><label for="ubatch_size">UBatch</label><input id="ubatch_size" type="number" placeholder="512"></div>
         <div class="field"><label for="parallel">Parallel</label><input id="parallel" type="number" placeholder="auto"></div>
+        <div class="field">
+          <label for="mtp">MTP</label>
+          <select id="mtp">
+            <option value="auto">auto</option>
+            <option value="on">on</option>
+            <option value="off">off</option>
+          </select>
+          <p class="meta field-meta" id="mtpMeta"></p>
+        </div>
+        <div class="field">
+          <label for="mtp_draft_tokens">MTP Draft Tokens</label>
+          <input id="mtp_draft_tokens" type="number" min="1" step="1" placeholder="3">
+        </div>
         <div class="field">
           <label for="flash_attn">Flash Attention</label>
           <select id="flash_attn">

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import mmap
 import re
 import struct
 from pathlib import Path
@@ -15,10 +16,13 @@ from .config import (
     LLAMA_BIN_DIRS,
     MODEL_DIR,
     MODEL_MODES,
+    MTP_MODES,
     POOLING_TYPES,
 )
 
 SHARDED_GGUF_RE = re.compile(r"^(?P<base>.+)-(?P<index>\d{5})-of-(?P<count>\d{5})\.gguf$", re.IGNORECASE)
+EMBEDDED_MTP_ARCHITECTURES = {"qwen35", "qwen35moe", "step35", "cohere2moe"}
+GGUF_METADATA_SEARCH_BYTES = 32 * 1024 * 1024
 
 def display_model_path(relative_path: Path) -> tuple[str, bool, bool]:
     match = SHARDED_GGUF_RE.match(relative_path.name)
@@ -102,6 +106,31 @@ def _gguf_read_value(handle: Any, value_type: int) -> Any:
     return struct.unpack(f"<{scalar_format}", _gguf_read_exact(handle, size))[0]
 
 
+def _gguf_find_scalar_metadata(model: Path, key: str) -> Any | None:
+    key_bytes = key.encode("utf-8")
+    pattern = struct.pack("<Q", len(key_bytes)) + key_bytes
+    with model.open("rb") as handle:
+        search_size = min(model.stat().st_size, GGUF_METADATA_SEARCH_BYTES)
+        if search_size <= 0:
+            return None
+        with mmap.mmap(handle.fileno(), length=search_size, access=mmap.ACCESS_READ) as mapped:
+            position = mapped.find(pattern)
+            if position < 0:
+                return None
+            value_offset = position + len(pattern)
+            if value_offset + 4 > search_size:
+                return None
+            value_type = int(struct.unpack_from("<I", mapped, value_offset)[0])
+            scalar_format = GGUF_SCALAR_FORMATS.get(value_type)
+            if scalar_format is None:
+                return None
+            scalar_size = struct.calcsize(scalar_format)
+            scalar_offset = value_offset + 4
+            if scalar_offset + scalar_size > search_size:
+                return None
+            return struct.unpack_from(f"<{scalar_format}", mapped, scalar_offset)[0]
+
+
 def read_gguf_metadata(model: Path) -> dict[str, Any]:
     stat = model.stat()
     cache_key = (str(model), stat.st_size, stat.st_mtime_ns)
@@ -116,6 +145,8 @@ def read_gguf_metadata(model: Path) -> dict[str, Any]:
         "architecture": None,
         "pooling": None,
         "embedding_dimensions": None,
+        "mtp_layers": 0,
+        "mtp_supported": False,
         "detected_mode": "chat",
         "metadata_error": None,
     }
@@ -143,6 +174,7 @@ def read_gguf_metadata(model: Path) -> dict[str, Any]:
                         f"{architecture}.embedding_length",
                     )
                 wanted = wanted or key.endswith(".pooling_type") or key.endswith(".embedding_length")
+                wanted = wanted or key.endswith(".nextn_predict_layers")
                 if wanted:
                     value = _gguf_read_value(handle, value_type)
                     if key == "general.architecture":
@@ -152,11 +184,24 @@ def read_gguf_metadata(model: Path) -> dict[str, Any]:
                         result["pooling"] = GGUF_POOLING_NAMES.get(int(value), f"unknown:{value}")
                     elif key.endswith(".embedding_length"):
                         result["embedding_dimensions"] = int(value)
+                    elif key.endswith(".nextn_predict_layers"):
+                        result["mtp_layers"] = max(0, int(value))
                 else:
                     _gguf_skip_value(handle, value_type)
 
-        pooling = result["pooling"]
         architecture_name = str(result["architecture"] or "").lower()
+        if result["mtp_layers"] == 0 and architecture_name in EMBEDDED_MTP_ARCHITECTURES:
+            mtp_layers = _gguf_find_scalar_metadata(
+                model,
+                f"{architecture_name}.nextn_predict_layers",
+            )
+            if mtp_layers is not None:
+                result["mtp_layers"] = max(0, int(mtp_layers))
+        result["mtp_supported"] = (
+            result["mtp_layers"] > 0
+            and architecture_name in EMBEDDED_MTP_ARCHITECTURES
+        )
+        pooling = result["pooling"]
         if pooling == "rank":
             result["detected_mode"] = "rerank"
         elif pooling in ("mean", "cls", "last") or "embed" in architecture_name:
@@ -182,6 +227,29 @@ def validate_pooling(value: Any) -> str:
     return pooling
 
 
+def validate_mtp_mode(value: Any) -> str:
+    mode = "auto" if value in (None, "") else str(value).strip().lower()
+    if mode not in MTP_MODES:
+        raise ValueError("mtp must be auto, on, or off")
+    return mode
+
+
+def validate_mtp_draft_tokens(value: Any) -> int:
+    if value in (None, ""):
+        return 3
+    if isinstance(value, bool) or isinstance(value, float):
+        raise ValueError("mtp_draft_tokens must be a positive integer")
+    if isinstance(value, int):
+        tokens = value
+    elif isinstance(value, str) and re.fullmatch(r"\d+", value.strip()):
+        tokens = int(value)
+    else:
+        raise ValueError("mtp_draft_tokens must be a positive integer")
+    if tokens < 1:
+        raise ValueError("mtp_draft_tokens must be a positive integer")
+    return tokens
+
+
 def resolve_llama_backend(value: Any) -> tuple[str, Path]:
     backend_id = DEFAULT_LLAMA_BACKEND if value in (None, "") else str(value).strip().lower()
     llama_bin_dir = LLAMA_BIN_DIRS.get(backend_id)
@@ -195,6 +263,8 @@ def effective_model_config(model: Path, settings: dict[str, Any]) -> dict[str, A
     metadata = read_gguf_metadata(model)
     configured_mode = validate_model_mode(settings.get("mode"))
     configured_pooling = validate_pooling(settings.get("pooling"))
+    configured_mtp = validate_mtp_mode(settings.get("mtp"))
+    mtp_draft_tokens = validate_mtp_draft_tokens(settings.get("mtp_draft_tokens"))
     effective_mode = metadata["detected_mode"] if configured_mode == "auto" else configured_mode
     detected_pooling = metadata["pooling"]
     effective_pooling = detected_pooling if configured_pooling == "auto" else configured_pooling
@@ -206,12 +276,25 @@ def effective_model_config(model: Path, settings: dict[str, Any]) -> dict[str, A
     if effective_mode != "embeddings":
         effective_pooling = None
 
+    if configured_mtp == "on" and effective_mode != "chat":
+        raise ValueError("MTP can only be enabled for chat models")
+    if configured_mtp == "on" and metadata["mtp_layers"] == 0:
+        raise ValueError("MTP is enabled but the GGUF has no nextn_predict_layers metadata")
+    if configured_mtp == "on" and not metadata["mtp_supported"]:
+        raise ValueError(
+            f"MTP is not supported for embedded heads on architecture: {metadata['architecture'] or 'unknown'}"
+        )
+    effective_mtp = effective_mode == "chat" and metadata["mtp_supported"] and configured_mtp != "off"
+
     return {
         **metadata,
         "configured_mode": configured_mode,
         "configured_pooling": configured_pooling,
+        "configured_mtp": configured_mtp,
         "effective_mode": effective_mode,
         "effective_pooling": effective_pooling,
+        "effective_mtp": effective_mtp,
+        "mtp_draft_tokens": mtp_draft_tokens,
         "capabilities": [effective_mode],
     }
 
@@ -222,9 +305,12 @@ def normalize_backend_settings(model_id: str, model_path: Path, settings: dict[s
     normalized["backend"] = resolve_llama_backend(normalized.get("backend"))[0]
     normalized["mode"] = validate_model_mode(normalized.get("mode"))
     normalized["pooling"] = validate_pooling(normalized.get("pooling"))
+    normalized["mtp"] = validate_mtp_mode(normalized.get("mtp"))
+    normalized["mtp_draft_tokens"] = validate_mtp_draft_tokens(normalized.get("mtp_draft_tokens"))
     config = effective_model_config(model_path, normalized)
     normalized["effective_mode"] = config["effective_mode"]
     normalized["effective_pooling"] = config["effective_pooling"]
+    normalized["effective_mtp"] = config["effective_mtp"]
     return normalized
 
 
@@ -264,8 +350,11 @@ def model_options(
                 **metadata,
                 "configured_mode": str(saved_settings.get("mode") or "auto"),
                 "configured_pooling": str(saved_settings.get("pooling") or "auto"),
+                "configured_mtp": str(saved_settings.get("mtp") or "auto"),
                 "effective_mode": metadata["detected_mode"],
                 "effective_pooling": metadata["pooling"],
+                "effective_mtp": False,
+                "mtp_draft_tokens": saved_settings.get("mtp_draft_tokens", 3),
                 "capabilities": [metadata["detected_mode"]],
                 "configuration_error": str(exc),
             }
@@ -389,4 +478,3 @@ def validate_model_path(model: str) -> Path:
     if candidate.suffix.lower() != ".gguf":
         raise ValueError("model must be a .gguf file")
     return candidate
-

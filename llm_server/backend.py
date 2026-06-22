@@ -65,6 +65,8 @@ class BackendInstance:
         self.run_id: int | None = None
         self.effective_mode = "chat"
         self.effective_pooling: str | None = None
+        self.effective_mtp = False
+        self.mtp_draft_tokens = 3
         self.backend_id = DEFAULT_LLAMA_BACKEND
         self.log_store = BackendLogStore(LOG_BUFFER_MAX_BYTES)
         self.aggregate_log_store = aggregate_log_store
@@ -102,6 +104,8 @@ class BackendInstance:
             "load_progress": load["progress"],
             "effective_mode": self.effective_mode,
             "effective_pooling": self.effective_pooling,
+            "effective_mtp": self.effective_mtp,
+            "mtp_draft_tokens": self.mtp_draft_tokens,
             "backend": self.backend_id,
             "command": self.command,
         }
@@ -154,6 +158,8 @@ class BackendInstance:
             self.settings = dict(settings)
             self.effective_mode = str(settings["effective_mode"])
             self.effective_pooling = settings.get("effective_pooling")
+            self.effective_mtp = bool(settings.get("effective_mtp"))
+            self.mtp_draft_tokens = int(settings.get("mtp_draft_tokens", 3))
             self.backend_id = backend_id
             self.started_at = time.time()
             self.last_used_at = self.started_at

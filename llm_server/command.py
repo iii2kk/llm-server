@@ -137,6 +137,16 @@ def build_llama_command(
     if reasoning_format in ("auto", "none", "deepseek", "deepseek-legacy"):
         command.extend(["--reasoning-format", str(reasoning_format)])
 
+    if settings.get("effective_mtp"):
+        command.extend(
+            [
+                "--spec-type",
+                "draft-mtp",
+                "--spec-draft-n-max",
+                str(settings.get("mtp_draft_tokens", 3)),
+            ]
+        )
+
     return command
 
 
@@ -173,4 +183,3 @@ async def wait_for_backend(backend_url: str, timeout_seconds: float = MODEL_LOAD
             return True
         await asyncio.sleep(0.5)
     return False
-

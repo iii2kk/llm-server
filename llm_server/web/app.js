@@ -13,6 +13,9 @@ const modeInput = document.getElementById('mode');
 const poolingInput = document.getElementById('pooling');
 const gpuLayersMode = document.getElementById('gpu_layers_mode');
 const gpuLayersInput = document.getElementById('gpu_layers');
+const mtpInput = document.getElementById('mtp');
+const mtpDraftTokensInput = document.getElementById('mtp_draft_tokens');
+const mtpMeta = document.getElementById('mtpMeta');
 const logsPanel = document.getElementById('logsPanel');
 const logsPre = document.getElementById('logsPre');
 const autoScroll = document.getElementById('autoScroll');
@@ -57,8 +60,12 @@ modelFilter.addEventListener('input', () => {
   localStorage.setItem('modelFilter', modelFilter.value);
   renderModels();
 });
-modeInput.addEventListener('change', () => updatePoolingControl());
+modeInput.addEventListener('change', () => {
+  updatePoolingControl();
+  updateMtpControl();
+});
 gpuLayersMode.addEventListener('change', () => updateGpuLayersInput(true));
+mtpInput.addEventListener('change', () => updateMtpControl());
 logModel.addEventListener('change', () => connectLogStream());
 backendRows.addEventListener('click', (event) => {
   const button = event.target.closest('button[data-action]');
@@ -131,6 +138,7 @@ function settings() {
     pooling: poolingInput.value,
     mmproj_enabled: mmprojEnabled.checked && !mmprojEnabled.disabled,
     flash_attn: document.getElementById('flash_attn').value,
+    mtp: mtpInput.value,
     reasoning: document.getElementById('reasoning').value,
     reasoning_format: document.getElementById('reasoning_format').value,
   };
@@ -140,7 +148,7 @@ function settings() {
     if (gpuLayersInput.value === '') throw new Error('GPU Layers custom value is required.');
     payload.gpu_layers = Number(gpuLayersInput.value);
   }
-  for (const key of ['ctx_size', 'threads', 'batch_size', 'ubatch_size', 'parallel', 'reasoning_budget']) {
+  for (const key of ['ctx_size', 'threads', 'batch_size', 'ubatch_size', 'parallel', 'mtp_draft_tokens', 'reasoning_budget']) {
     const value = document.getElementById(key).value;
     if (value !== '') payload[key] = Number(value);
   }
@@ -174,6 +182,25 @@ function updatePoolingControl() {
   poolingInput.disabled = effectiveMode !== 'embeddings';
 }
 
+function updateMtpControl() {
+  const item = selectedModel();
+  const supported = Boolean(item?.mtp_supported);
+  const effectiveMode = modeInput.value === 'auto' ? item?.detected_mode : modeInput.value;
+  const enabled = effectiveMode === 'chat'
+    && (mtpInput.value === 'on' || (mtpInput.value === 'auto' && supported));
+  mtpDraftTokensInput.disabled = !enabled;
+  const layers = Number(item?.mtp_layers || 0);
+  if (effectiveMode !== 'chat') {
+    mtpMeta.textContent = 'Available for chat mode only';
+  } else if (supported) {
+    mtpMeta.textContent = `Detected: ${layers} MTP layer${layers === 1 ? '' : 's'}`;
+  } else if (layers > 0) {
+    mtpMeta.textContent = `Detected: ${layers} layer${layers === 1 ? '' : 's'}; embedded MTP is unsupported for this architecture`;
+  } else {
+    mtpMeta.textContent = 'Detected: none';
+  }
+}
+
 function hasOwn(object, key) {
   return Object.prototype.hasOwnProperty.call(object || {}, key);
 }
@@ -198,7 +225,7 @@ function applySelectedModelSettings() {
   mmprojEnabled.checked = hasMmproj && (hasOwn(settings, 'mmproj_enabled') ? Boolean(settings.mmproj_enabled) : true);
   mmprojMeta.textContent = hasMmproj ? `MMProj: ${mmprojPath}` : 'MMProj: none';
 
-  for (const key of ['ctx_size', 'threads', 'batch_size', 'ubatch_size', 'parallel', 'reasoning_budget']) {
+  for (const key of ['ctx_size', 'threads', 'batch_size', 'ubatch_size', 'parallel', 'mtp_draft_tokens', 'reasoning_budget']) {
     setNumberValue(key, settings);
   }
 
@@ -216,12 +243,14 @@ function applySelectedModelSettings() {
   updateGpuLayersInput(false);
 
   setSelectValue('flash_attn', settings.flash_attn, 'auto');
+  setSelectValue('mtp', settings.mtp, 'auto');
   setSelectValue('reasoning', settings.reasoning, 'off');
   setSelectValue('reasoning_format', settings.reasoning_format, 'none');
   setSelectValue('backend', settings.backend, defaultBackend);
   setSelectValue('mode', settings.mode, 'auto');
   setSelectValue('pooling', settings.pooling, 'auto');
   updatePoolingControl();
+  updateMtpControl();
 }
 
 async function loadModels(applySettings = true) {
@@ -335,6 +364,7 @@ function createModelRow(item) {
     <td data-field="size"></td>
     <td><span class="pill" data-field="mode"></span><span class="subtext" data-field="architecture"></span></td>
     <td><span class="pill" data-field="mmproj"></span></td>
+    <td><span class="pill" data-field="mtp"></span></td>
     <td><span class="pill" data-field="saved"></span></td>
     <td data-field="state"></td>
     <td>
@@ -351,6 +381,7 @@ function updateModelRow(row, item) {
   const running = Boolean(backend && (backend.running || backend.load_state === 'loading' || backend.load_state === 'ready'));
   const mode = row.querySelector('[data-field="mode"]');
   const mmproj = row.querySelector('[data-field="mmproj"]');
+  const mtp = row.querySelector('[data-field="mtp"]');
   const saved = row.querySelector('[data-field="saved"]');
 
   row.classList.toggle('selected', item.relative_path === selectedModelId);
@@ -362,6 +393,8 @@ function updateModelRow(row, item) {
   setText(row.querySelector('[data-field="architecture"]'), `${item.architecture || 'unknown'}${item.effective_pooling ? ` / ${item.effective_pooling}` : ''}`);
   setClassName(mmproj, `pill ${item.mmproj_path ? 'ok' : ''}`.trim());
   setText(mmproj, item.mmproj_path ? 'yes' : 'none');
+  setClassName(mtp, `pill ${item.effective_mtp ? 'ok' : item.mtp_supported ? 'warn' : ''}`.trim());
+  setText(mtp, item.effective_mtp ? 'on' : item.mtp_supported ? 'off' : 'none');
   setClassName(saved, `pill ${savedSettings[item.relative_path] ? 'ok' : 'warn'}`);
   setText(saved, savedSettings[item.relative_path] ? 'saved' : 'default');
   updateStateContent(row.querySelector('[data-field="state"]'), backend);
@@ -386,7 +419,7 @@ function renderModels(options = {}) {
 
   if (!filtered.length) {
     removeUnusedRows(modelRows, []);
-    setEmptyRow(modelRows, 7, 'No matching GGUF files.');
+    setEmptyRow(modelRows, 8, 'No matching GGUF files.');
   } else {
     removeEmptyRow(modelRows);
     const modelIds = filtered.map((item) => item.relative_path);
@@ -558,7 +591,11 @@ function updateBackendRow(row, backend) {
   setText(row.querySelector('[data-field="backend"]'), backendName(backend.backend || defaultBackend));
   setClassName(mode, `pill ${backend.effective_mode === 'embeddings' ? 'ok' : ''}`.trim());
   setText(mode, backend.effective_mode || 'chat');
-  setText(row.querySelector('[data-field="pooling"]'), backend.effective_pooling || '');
+  const details = [
+    backend.effective_pooling || '',
+    backend.effective_mtp ? `MTP ×${backend.mtp_draft_tokens || 3}` : '',
+  ].filter(Boolean).join(' / ');
+  setText(row.querySelector('[data-field="pooling"]'), details);
   updateStateContent(row.querySelector('[data-field="state"]'), backend);
   setText(row.querySelector('[data-field="port"]'), backend.port ?? '-');
   setText(row.querySelector('[data-field="uptime"]'), backend.uptime_seconds == null ? '-' : `${backend.uptime_seconds}s`);
