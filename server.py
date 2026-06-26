@@ -8,6 +8,7 @@ from llm_server import command as _command
 from llm_server import logic as _logic
 from llm_server import models as _models
 from llm_server.api import (
+    api_default_model,
     api_grammars,
     api_logs,
     api_logs_stream,

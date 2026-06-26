@@ -21,6 +21,7 @@ from .config import (
     BACKEND_HOST,
     BACKEND_PORT,
     BASE_DIR,
+    DEFAULT_MODEL_PURPOSES,
     DEFAULT_LLAMA_BACKEND,
     LOG_BUFFER_MAX_BYTES,
     MODEL_SETTINGS_FILE,
@@ -39,7 +40,13 @@ from .responses import (
     prefix_log_text,
     prepend_env_path,
 )
-from .settings_store import load_recent_model_ids, load_saved_model_settings, saved_settings_payload, write_saved_model_settings
+from .settings_store import (
+    load_default_model_ids,
+    load_recent_model_ids,
+    load_saved_model_settings,
+    saved_settings_payload,
+    write_saved_model_settings,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -283,14 +290,22 @@ class BackendRegistry:
         self.instances: dict[str, BackendInstance] = {}
         self.saved_settings: dict[str, dict[str, Any]] = load_saved_model_settings()
         self.recent_model_ids: list[str] = load_recent_model_ids()
+        self.default_model_ids: dict[str, str] = load_default_model_ids()
         self.aggregate_log_store = BackendLogStore(LOG_BUFFER_MAX_BYTES, echo_stdout=False)
         self._lock = asyncio.Lock()
 
     async def status(self) -> dict[str, Any]:
         async with self._lock:
             instances = list(self.instances.values())
+            default_model_ids = dict(self.default_model_ids)
 
         statuses = await asyncio.gather(*(instance.status() for instance in instances))
+        for status in statuses:
+            status["default_for"] = [
+                purpose
+                for purpose, model_id in default_model_ids.items()
+                if model_id == status["model_id"]
+            ]
         active = [status for status in statuses if status["running"] or status["load_state"] == "loading"]
         latest = max(active, key=lambda item: item["started_at"] or 0, default=None)
         return {
@@ -301,6 +316,7 @@ class BackendRegistry:
             "latest_model_id": latest["model_id"] if latest else None,
             "backend_url": latest["backend_url"] if latest else None,
             "backend_reachable": latest["backend_reachable"] if latest else False,
+            "default_model_ids": default_model_ids,
             "backends": statuses,
         }
 
@@ -349,6 +365,49 @@ class BackendRegistry:
             instances = list(self.instances.values())
         results = await asyncio.gather(*(instance.stop() for instance in instances))
         return {"ok": True, "stopped": len(results), "status": await self.status()}
+
+    async def set_default_model(self, settings: dict[str, Any]) -> dict[str, Any]:
+        purpose_value = settings.get("purpose")
+        model_ref = settings.get("model")
+        if model_ref in (None, ""):
+            purpose = self._validate_default_purpose(purpose_value)
+            async with self._lock:
+                changed = self.default_model_ids.pop(purpose, None) is not None
+            if changed:
+                self._persist_settings()
+            return {
+                "ok": True,
+                "default_model_ids": await self.default_model_ids_snapshot(),
+                "status": await self.status(),
+            }
+
+        model_id, model_path = resolve_model_reference_required(model_ref, self.saved_settings)
+        async with self._lock:
+            instance = self.instances.get(model_id)
+            active_mode = instance.effective_mode if instance is not None and instance.is_active() else None
+
+        if active_mode is None:
+            normalized = normalize_backend_settings(
+                model_id,
+                model_path,
+                dict(self.saved_settings.get(model_id, {"model": model_id})),
+            )
+            active_mode = str(normalized["effective_mode"])
+        if active_mode not in DEFAULT_MODEL_PURPOSES:
+            raise ValueError(f"{active_mode} models cannot be selected as a default model")
+
+        purpose = active_mode if purpose_value in (None, "", "auto") else self._validate_default_purpose(purpose_value)
+        if purpose != active_mode:
+            raise ValueError(f"{model_id} is a {active_mode} model and cannot be used for {purpose}")
+
+        async with self._lock:
+            self.default_model_ids[purpose] = model_id
+        self._persist_settings()
+        return {
+            "ok": True,
+            "default_model_ids": await self.default_model_ids_snapshot(),
+            "status": await self.status(),
+        }
 
     async def logs_for(self, model_ref: str | None) -> BackendLogStore | None:
         if not model_ref:
@@ -416,7 +475,10 @@ class BackendRegistry:
             instance.last_used_at = time.time()
             return instance, None
 
-        instance = await self.latest_active_instance(purpose=purpose)
+        instance = await self.default_active_instance(purpose=purpose)
+        selected_default = instance is not None
+        if instance is None:
+            instance = await self.latest_active_instance(purpose=purpose)
         if instance is None:
             code = "no_embedding_model_loaded" if purpose == "embeddings" else "no_chat_model_loaded"
             return None, openai_error_response(
@@ -427,8 +489,9 @@ class BackendRegistry:
                 code=code,
             )
         if not await wait_for_backend(instance.backend_url):
+            label = "Default" if selected_default else "Latest"
             return None, openai_error_response(
-                f"Latest model is not ready: {instance.model_id}",
+                f"{label} model is not ready: {instance.model_id}",
                 status_code=503,
                 error_type="backend_load_error",
                 param="model",
@@ -437,6 +500,14 @@ class BackendRegistry:
         self._mark_recent(instance.model_id)
         instance.last_used_at = time.time()
         return instance, None
+
+    async def default_active_instance(self, *, purpose: str) -> BackendInstance | None:
+        async with self._lock:
+            model_id = self.default_model_ids.get(purpose)
+            instance = self.instances.get(model_id or "") if model_id else None
+            if instance is None or not instance.is_active() or instance.effective_mode != purpose:
+                return None
+            return instance
 
     async def latest_active_instance(self, *, purpose: str | None = None) -> BackendInstance | None:
         async with self._lock:
@@ -454,6 +525,10 @@ class BackendRegistry:
     async def recent_model_ids_snapshot(self) -> list[str]:
         async with self._lock:
             return list(self.recent_model_ids)
+
+    async def default_model_ids_snapshot(self) -> dict[str, str]:
+        async with self._lock:
+            return dict(self.default_model_ids)
 
     async def _instance_for(self, model_id: str, model_path: Path) -> BackendInstance:
         async with self._lock:
@@ -490,9 +565,16 @@ class BackendRegistry:
         if persist and self.recent_model_ids != old:
             self._persist_settings()
 
+    def _validate_default_purpose(self, value: Any) -> str:
+        purpose = "chat" if value in (None, "", "auto") else str(value).strip().lower()
+        if purpose not in DEFAULT_MODEL_PURPOSES:
+            available = ", ".join(DEFAULT_MODEL_PURPOSES)
+            raise ValueError(f"purpose must be one of: {available}")
+        return purpose
+
     def _persist_settings(self) -> None:
         try:
-            write_saved_model_settings(self.saved_settings, self.recent_model_ids)
+            write_saved_model_settings(self.saved_settings, self.recent_model_ids, self.default_model_ids)
         except OSError as exc:
             logger.warning("Failed to save model settings to %s: %s", MODEL_SETTINGS_FILE, exc)
 

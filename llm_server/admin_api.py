@@ -50,6 +50,7 @@ async def api_models(authorization: str | None = Header(default=None)) -> JSONRe
             "default_backend": DEFAULT_LLAMA_BACKEND,
             "saved_settings": await registry.saved_settings_snapshot(),
             "recent_models": await registry.recent_model_ids_snapshot(),
+            "default_models": await registry.default_model_ids_snapshot(),
         }
     )
 
@@ -192,4 +193,20 @@ async def api_restart(request: Request, authorization: str | None = Header(defau
             code="backend_start_failed",
         )
 
+
+@router.post("/api/default-model")
+async def api_default_model(request: Request, authorization: str | None = Header(default=None)) -> JSONResponse:
+    auth_error = require_auth(authorization)
+    if auth_error:
+        return auth_error
+    try:
+        body = await request.body()
+        settings = json.loads(body) if body else {}
+        if not isinstance(settings, dict):
+            return openai_error_response("Request body must be a JSON object", code="invalid_json")
+        return JSONResponse(await registry.set_default_model(settings))
+    except json.JSONDecodeError:
+        return openai_error_response("Request body must be valid JSON", code="invalid_json")
+    except ValueError as exc:
+        return openai_error_response(str(exc), param="model", code="invalid_default_model")
 

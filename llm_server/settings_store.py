@@ -4,7 +4,13 @@ import json
 import logging
 from typing import Any
 
-from .config import MODEL_SETTINGS_FILE, RECENT_MODELS_MAX, SAVED_BACKEND_SETTING_KEYS, SETTINGS_DIR
+from .config import (
+    DEFAULT_MODEL_PURPOSES,
+    MODEL_SETTINGS_FILE,
+    RECENT_MODELS_MAX,
+    SAVED_BACKEND_SETTING_KEYS,
+    SETTINGS_DIR,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -68,14 +74,34 @@ def load_recent_model_ids() -> list[str]:
     return model_ids
 
 
+def load_default_model_ids() -> dict[str, str]:
+    raw = load_model_settings_document()
+    default_models = raw.get("default_models")
+    if not isinstance(default_models, dict):
+        return {}
+
+    defaults: dict[str, str] = {}
+    for purpose in DEFAULT_MODEL_PURPOSES:
+        model_id = default_models.get(purpose)
+        if isinstance(model_id, str) and model_id:
+            defaults[purpose] = model_id
+    return defaults
+
+
 def write_saved_model_settings(
     saved_settings: dict[str, dict[str, Any]],
     recent_model_ids: list[str] | None = None,
+    default_model_ids: dict[str, str] | None = None,
 ) -> None:
     SETTINGS_DIR.mkdir(parents=True, exist_ok=True)
     payload = {
         "version": 1,
         "recent_models": list(recent_model_ids or [])[:RECENT_MODELS_MAX],
+        "default_models": {
+            purpose: model_id
+            for purpose, model_id in sorted((default_model_ids or {}).items())
+            if purpose in DEFAULT_MODEL_PURPOSES and model_id
+        },
         "models": {
             model_id: saved_settings_payload(model_id, settings)
             for model_id, settings in sorted(saved_settings.items())
@@ -84,5 +110,4 @@ def write_saved_model_settings(
     tmp_path = MODEL_SETTINGS_FILE.with_suffix(".json.tmp")
     tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     tmp_path.replace(MODEL_SETTINGS_FILE)
-
 

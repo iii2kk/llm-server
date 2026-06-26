@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from .admin_api import (
+    api_default_model,
     api_grammars,
     api_logs,
     api_logs_stream,
@@ -22,4 +23,3 @@ from .openai_api import (
 router = APIRouter()
 router.include_router(admin_router)
 router.include_router(openai_router)
-

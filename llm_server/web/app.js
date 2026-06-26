@@ -34,6 +34,7 @@ let availableBackends = [];
 let defaultBackend = '';
 let savedSettings = {};
 let recentModels = [];
+let defaultModels = {};
 let selectedModelId = localStorage.getItem('selectedModelId') || '';
 let statusData = {backends: []};
 let logSource = null;
@@ -78,6 +79,8 @@ backendRows.addEventListener('click', (event) => {
     connectLogStream();
   } else if (action === 'edit') {
     openSettings(modelId);
+  } else if (action === 'default') {
+    setDefaultModel(modelId);
   } else if (action === 'stop') {
     stopBackend(modelId);
   } else if (action === 'restart') {
@@ -269,6 +272,7 @@ async function loadModels(applySettings = true) {
   }
   savedSettings = data.saved_settings || {};
   recentModels = data.recent_models || [];
+  defaultModels = data.default_models || {};
   renderRecentModels();
   renderModels({applySettings});
 }
@@ -553,10 +557,13 @@ function setStatusJsonOpen(open) {
 
 function renderStatus(data) {
   statusData = data;
+  defaultModels = data.default_model_ids || defaultModels || {};
   setText(statusJson, JSON.stringify(data, null, 2));
   proxyStatusDot.className = `dot ${data.running ? 'ready' : ''}`;
   setText(document.getElementById('activeCount'), data.count || 0);
   setText(document.getElementById('latestModel'), data.latest_model_id ? modelName(data.latest_model_id) : 'none');
+  setText(document.getElementById('defaultChatModel'), defaultModels.chat ? modelName(defaultModels.chat) : 'latest');
+  setText(document.getElementById('defaultEmbeddingModel'), defaultModels.embeddings ? modelName(defaultModels.embeddings) : 'latest');
   setText(document.getElementById('startPort'), data.backend_start_port ?? '-');
   renderBackends(data.backends || []);
   renderLogOptions(data.backends || []);
@@ -572,13 +579,17 @@ function createBackendRow(modelId) {
     <td><span class="pill" data-field="backend"></span></td>
     <td><span class="pill" data-field="mode"></span><span class="subtext" data-field="pooling"></span></td>
     <td data-field="state"></td>
+    <td><span class="pill" data-field="default"></span></td>
     <td data-field="port"></td>
     <td data-field="uptime"></td>
     <td>
-      <button class="neutral compact" data-action="logs">Logs</button>
-      <button class="neutral compact" data-action="edit">Edit</button>
-      <button class="secondary compact" data-action="restart">Restart</button>
-      <button class="danger compact" data-action="stop">Stop</button>
+      <div class="backend-actions">
+        <button class="neutral compact" data-action="default">Use</button>
+        <button class="neutral compact" data-action="logs">Logs</button>
+        <button class="neutral compact" data-action="edit">Edit</button>
+        <button class="secondary compact" data-action="restart">Restart</button>
+        <button class="danger compact" data-action="stop">Stop</button>
+      </div>
     </td>
   `;
   createStateContent(row.querySelector('[data-field="state"]'));
@@ -587,6 +598,10 @@ function createBackendRow(modelId) {
 
 function updateBackendRow(row, backend) {
   const mode = row.querySelector('[data-field="mode"]');
+  const defaultPill = row.querySelector('[data-field="default"]');
+  const defaultFor = backend.default_for || [];
+  const active = Boolean(backend.running || backend.load_state === 'loading' || backend.load_state === 'ready');
+  const defaultForMode = defaultFor.includes(backend.effective_mode);
   setText(row.querySelector('[data-field="model"]'), modelName(backend.model_id));
   setText(row.querySelector('[data-field="backend"]'), backendName(backend.backend || defaultBackend));
   setClassName(mode, `pill ${backend.effective_mode === 'embeddings' ? 'ok' : ''}`.trim());
@@ -597,14 +612,24 @@ function updateBackendRow(row, backend) {
   ].filter(Boolean).join(' / ');
   setText(row.querySelector('[data-field="pooling"]'), details);
   updateStateContent(row.querySelector('[data-field="state"]'), backend);
+  setClassName(defaultPill, `pill ${defaultForMode ? 'ok' : ''}`.trim());
+  setText(defaultPill, defaultFor.length ? defaultFor.join(', ') : '-');
   setText(row.querySelector('[data-field="port"]'), backend.port ?? '-');
   setText(row.querySelector('[data-field="uptime"]'), backend.uptime_seconds == null ? '-' : `${backend.uptime_seconds}s`);
+  setButtonState(row.querySelector('[data-action="default"]'), {
+    disabled: !active || defaultForMode,
+    label: defaultForMode ? 'Default' : 'Use',
+    neutral: true,
+  });
+  row.querySelector('[data-action="default"]').title = active
+    ? 'Use for requests without a model'
+    : 'Start the model before selecting it';
 }
 
 function renderBackends(backends) {
   if (!backends.length) {
     removeUnusedRows(backendRows, []);
-    setEmptyRow(backendRows, 7, 'No models have been started.');
+    setEmptyRow(backendRows, 8, 'No models have been started.');
     return;
   }
 
@@ -669,6 +694,13 @@ async function restartModel(modelId) {
     const payload = {...(savedSettings[modelId] || {}), model: modelId};
     await api('/api/restart', {method: 'POST', body: JSON.stringify(payload)});
   }, 'restarted');
+}
+
+async function setDefaultModel(modelId) {
+  await runAction(async () => {
+    if (!modelId) throw new Error('No model selected.');
+    await api('/api/default-model', {method: 'POST', body: JSON.stringify({model: modelId})});
+  }, 'default updated');
 }
 
 async function stopBackend(modelId) {

@@ -386,6 +386,57 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIs(selected, embedding)
 
+    async def test_default_backend_is_used_before_latest_for_unspecified_model(self) -> None:
+        registry = server.BackendRegistry()
+
+        class FakeInstance:
+            def __init__(self, model_id: str, started_at: float) -> None:
+                self.model_id = model_id
+                self.effective_mode = "chat"
+                self.started_at = started_at
+                self.backend_url = f"http://{model_id}"
+                self.last_used_at = None
+
+            def is_active(self) -> bool:
+                return True
+
+        default = FakeInstance("default.gguf", 10)
+        latest = FakeInstance("latest.gguf", 20)
+        registry.instances = {"default.gguf": default, "latest.gguf": latest}
+        registry.default_model_ids = {"chat": "default.gguf"}
+
+        with patch("llm_server.backend.wait_for_backend", AsyncMock(return_value=True)):
+            selected, error = await registry.backend_for_request(None, purpose="chat")
+
+        self.assertIsNone(error)
+        self.assertIs(selected, default)
+
+    async def test_set_default_model_infers_running_model_purpose(self) -> None:
+        registry = server.BackendRegistry()
+        registry.default_model_ids = {}
+
+        class FakeInstance:
+            model_id = "embedding.gguf"
+            effective_mode = "embeddings"
+
+            def is_active(self) -> bool:
+                return True
+
+        registry.instances = {"embedding.gguf": FakeInstance()}
+
+        with (
+            patch(
+                "llm_server.backend.resolve_model_reference_required",
+                return_value=("embedding.gguf", Path("/tmp/embedding.gguf")),
+            ),
+            patch.object(registry, "_persist_settings"),
+            patch.object(registry, "status", AsyncMock(return_value={})),
+        ):
+            result = await registry.set_default_model({"model": "embedding.gguf"})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(registry.default_model_ids, {"embeddings": "embedding.gguf"})
+
     def test_capability_errors(self) -> None:
         response = server.model_capability_error("chat.gguf", "chat", "embeddings")
         self.assertIsNotNone(response)
@@ -455,6 +506,7 @@ class WebUiTests(unittest.TestCase):
         self.assertIn('src="/static/app.js"', index.text)
         self.assertIn('id="settingsDialog"', index.text)
         self.assertIn('id="modelRows"', index.text)
+        self.assertIn('id="defaultChatModel"', index.text)
         self.assertIn('id="mtp"', index.text)
         self.assertIn('id="mtp_draft_tokens"', index.text)
         self.assertEqual(stylesheet.status_code, 200)
@@ -462,6 +514,8 @@ class WebUiTests(unittest.TestCase):
         self.assertEqual(script.status_code, 200)
         self.assertIn("function connectLogStream()", script.text)
         self.assertIn("function updateModelRow(", script.text)
+        self.assertIn("function setDefaultModel(", script.text)
+        self.assertIn("/api/default-model", script.text)
         self.assertIn("function updateMtpControl()", script.text)
         self.assertNotIn("modelRows.innerHTML", script.text)
         self.assertNotIn("recentRows.innerHTML", script.text)

@@ -49,6 +49,7 @@ MODEL_LOAD_TIMEOUT_SECONDS = float(os.getenv("MODEL_LOAD_TIMEOUT_SECONDS", "60")
 SETTINGS_DIR = BASE_DIR / ".llm-server"
 MODEL_SETTINGS_FILE = SETTINGS_DIR / "model-settings.json"
 RECENT_MODELS_MAX = 5
+DEFAULT_MODEL_PURPOSES = ("chat", "embeddings")
 SAVED_BACKEND_SETTING_KEYS = (
     "model",
     "backend",

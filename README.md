@@ -65,7 +65,7 @@ backendの `llama-server` は `127.0.0.1` の各backendポートにのみ起動�
 
 Web UIから起動した `llama-server` のログは、`uv run python server.py` を実行しているターミナルに表示されます。
 
-`/v1/models` の `id` がAPIで指定するモデル名です。既知の未ロードモデルを `model` に指定した場合、proxyが用途に合うモードでロードしてから転送します。`model` が未指定、`"local"`、または存在しない値の場合は、最後に起動した同用途のモデルへ転送します。
+`/v1/models` の `id` がAPIで指定するモデル名です。既知の未ロードモデルを `model` に指定した場合、proxyが用途に合うモードでロードしてから転送します。`model` が未指定、`"local"`、または存在しない値の場合は、Running Modelsで設定した同用途の既定モデルへ転送します。既定モデルが起動していない場合は、最後に起動した同用途のモデルへフォールバックします。
 
 モデル用途はGGUF先頭のarchitecture、pooling、embedding次元数から自動判定します。Web UIの `Mode` と `Pooling` でモデルごとに上書きできます。embeddingモデルは `llama-server --embeddings` で起動されるため、同じGGUFをchat用とembedding用に同時ロードすることはありません。実行中モデルの用途を変更した場合は `Restart` してください。
 
@@ -98,7 +98,7 @@ Web UIでモデルを選択すると、`Start` または `Restart` 時に以下�
 
 embeddingではpooling方式やモデル構造により、入力全体を1回のUBatchで処理する必要があります。この場合はContextが十分でも `UBatch` が入力token数より小さいと処理できません。長文をembeddingする場合は、`Context`、`Batch`、`UBatch` を想定する最大入力token数以上に設定してください。値を大きくするとメモリ消費も増えるため、ロードログと実際の入力長を見ながら調整します。
 
-設定はモデルごとに `.llm-server/model-settings.json` へ保存されます。APIリクエストで既知の未ロードモデルが自動ロードされる場合も、そのモデルの保存済み設定が使われます。実行中のモデルに変更を反映するには `Restart` を押してください。
+設定はモデルごとに `.llm-server/model-settings.json` へ保存されます。Running Modelsの `Use` で選んだchat/embeddings別の既定モデルも同じファイルへ保存されます。APIリクエストで既知の未ロードモデルが自動ロードされる場合も、そのモデルの保存済み設定が使われます。実行中のモデルに変更を反映するには `Restart` を押してください。
 
 ### MTPの注意点
 
@@ -218,7 +218,7 @@ curl http://localhost:8000/v1/chat/completions \
 
 | 項目 | 説明 | 例 |
 | --- | --- | --- |
-| `model` | `/v1/models` の `id` です。既知の未ロードモデルなら自動ロードされます。未指定、`"local"`、存在しない値は最後に起動したモデルへフォールバックします。 | `"model": "Qwen/Qwen3.gguf"` |
+| `model` | `/v1/models` の `id` です。既知の未ロードモデルなら自動ロードされます。未指定、`"local"`、存在しない値はRunning Modelsで選んだ同用途の既定モデルへフォールバックし、既定モデルが起動していない場合は最後に起動した同用途のモデルを使います。 | `"model": "Qwen/Qwen3.gguf"` |
 | `messages` | 必須。会話履歴です。各要素に `role` と `content` を指定します。 | `"messages": [{"role": "user", "content": "こんにちは"}]` |
 | `stream` | `true` ならServer-Sent Eventsで逐次返します。 | `"stream": true` |
 | `stream_options` | streaming時の追加オプションです。`include_usage` を使うと最後にusage情報を含めます。 | `"stream_options": {"include_usage": true}` |
