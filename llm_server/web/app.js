@@ -411,10 +411,13 @@ function updateModelRow(row, item) {
 
 function renderModels(options = {}) {
   const previous = selectedModelId;
-  const query = modelFilter.value.trim().toLowerCase();
+  const terms = modelFilter.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
   const filtered = allModels.filter((item) => {
-    const haystack = `${item.display_name} ${item.relative_path} ${item.name} ${item.path}`.toLowerCase();
-    return !query || haystack.includes(query);
+    const haystack = [item.display_name, item.relative_path, item.name, item.path]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+    return !terms.length || terms.every((term) => haystack.includes(term));
   });
 
   if (!allModels.some((item) => item.relative_path === selectedModelId)) {
