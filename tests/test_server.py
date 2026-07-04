@@ -5,6 +5,7 @@ import os
 import struct
 import tempfile
 import unittest
+from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -12,6 +13,7 @@ import httpx
 from fastapi.testclient import TestClient
 
 import server
+from llm_server.request_logs import RequestResponseLogger
 
 
 class EnvironmentTests(unittest.TestCase):
@@ -492,6 +494,82 @@ class EmbeddingsApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["data"][0]["embedding"], [0.1, 0.2])
+
+    def test_embedding_exchange_is_logged_by_model(self) -> None:
+        instance = type("Instance", (), {"model_id": "nested/embedding.gguf", "backend_url": "http://backend"})()
+        backend_response = httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "model": "nested/embedding.gguf",
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+            },
+        )
+
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def post(self, url, json, headers):
+                return backend_response
+
+        with tempfile.TemporaryDirectory() as log_dir:
+            request_logger = RequestResponseLogger(Path(log_dir), retention_days=7)
+            with (
+                patch.object(
+                    server.registry,
+                    "backend_for_request",
+                    AsyncMock(return_value=(instance, None)),
+                ),
+                patch.object(server.httpx, "AsyncClient", return_value=FakeClient()),
+                patch("llm_server.openai_api.request_logger", request_logger),
+                TestClient(server.app) as client,
+            ):
+                response = client.post(
+                    "/v1/embeddings",
+                    json={"model": "local", "input": ["hello"], "encoding_format": "float"},
+                )
+
+            self.assertEqual(response.status_code, 200)
+            log_files = list(Path(log_dir).glob("*.jsonl"))
+            self.assertEqual(len(log_files), 1)
+            self.assertIn("nested_embedding.gguf", log_files[0].name)
+            record = json.loads(log_files[0].read_text(encoding="utf-8").strip())
+            self.assertEqual(record["endpoint"], "/v1/embeddings")
+            self.assertEqual(record["model"], "nested/embedding.gguf")
+            self.assertEqual(record["request"]["model"], "nested/embedding.gguf")
+            self.assertEqual(record["request"]["input"], ["hello"])
+            self.assertEqual(record["response"]["status_code"], 200)
+            self.assertEqual(record["response"]["body"]["data"][0]["embedding"], [0.1, 0.2])
+
+
+class RequestResponseLoggerTests(unittest.TestCase):
+    def test_old_daily_logs_are_deleted_on_write(self) -> None:
+        with tempfile.TemporaryDirectory() as log_dir:
+            root = Path(log_dir)
+            today = date.today()
+            old_log = root / f"model-000000000000.{(today - timedelta(days=8)).isoformat()}.jsonl"
+            kept_log = root / f"model-000000000000.{(today - timedelta(days=6)).isoformat()}.jsonl"
+            old_log.write_text("{}\n", encoding="utf-8")
+            kept_log.write_text("{}\n", encoding="utf-8")
+
+            request_logger = RequestResponseLogger(root, retention_days=7)
+            request_logger.log(
+                request_id="req",
+                endpoint="/v1/chat/completions",
+                model_id="model.gguf",
+                request_payload={"model": "model.gguf"},
+                status_code=200,
+                response_body={"ok": True},
+                started_at=0,
+                completed_at=0,
+            )
+
+            self.assertFalse(old_log.exists())
+            self.assertTrue(kept_log.exists())
 
 
 class WebUiTests(unittest.TestCase):

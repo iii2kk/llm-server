@@ -25,6 +25,8 @@ PROXY_PORT=8000
 DEFAULT_MAX_TOKENS=512
 GRAMMAR_DEFAULT_MAX_TOKENS=256
 MODEL_LOAD_TIMEOUT_SECONDS=60
+REQUEST_RESPONSE_LOG_DIR=.llm-server/request-logs
+REQUEST_RESPONSE_LOG_RETENTION_DAYS=7
 PROXY_API_KEY=
 ```
 
@@ -64,6 +66,8 @@ http://<ubuntu-lan-ip>:8000/
 backendの `llama-server` は `127.0.0.1` の各backendポートにのみ起動し、LAN公開はproxyの `0.0.0.0:8000` 側で行います。
 
 Web UIから起動した `llama-server` のログは、`uv run python server.py` を実行しているターミナルに表示されます。
+
+OpenAI互換APIのリクエスト/レスポンスは、モデルごとに `.llm-server/request-logs/` へJSON Lines形式で保存されます。ファイル名は `<model>-<hash>.YYYY-MM-DD.jsonl` です。`REQUEST_RESPONSE_LOG_RETENTION_DAYS` の既定値は `7` で、保存期間を過ぎたログは次回書き込み時に削除されます。
 
 `/v1/models` の `id` がAPIで指定するモデル名です。既知の未ロードモデルを `model` に指定した場合、proxyが用途に合うモードでロードしてから転送します。`model` が未指定、`"local"`、または存在しない値の場合は、Running Modelsで設定した同用途の既定モデルへ転送します。既定モデルが起動していない場合は、最後に起動した同用途のモデルへフォールバックします。
 

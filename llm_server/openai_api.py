@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
+import time
+import uuid
 from typing import Any
 
 import httpx
@@ -17,6 +20,7 @@ from .config import (
     MODEL_DIR,
 )
 from .models import grammar_options, model_options
+from .request_logs import decode_response_body, request_logger
 from .responses import (
     apply_default_max_tokens,
     backend_error_response,
@@ -29,8 +33,41 @@ from .responses import (
 )
 
 router = APIRouter()
+
+
+def _json_response_body(response: JSONResponse) -> Any:
+    return json.loads(response.body.decode("utf-8"))
+
+
+def _log_exchange(
+    *,
+    request_id: str,
+    endpoint: str,
+    model_id: str,
+    request_payload: dict[str, Any],
+    status_code: int,
+    response_body: Any,
+    started_at: float,
+    stream: bool = False,
+    error: str | None = None,
+) -> None:
+    request_logger.log(
+        request_id=request_id,
+        endpoint=endpoint,
+        model_id=model_id,
+        request_payload=request_payload,
+        status_code=status_code,
+        response_body=response_body,
+        started_at=started_at,
+        stream=stream,
+        error=error,
+    )
+
+
 @router.post("/v1/chat/completions", response_model=None)
 async def chat_completions(request: Request, authorization: str | None = Header(default=None)):
+    request_id = str(uuid.uuid4())
+    started_at = time.time()
     auth_error = require_auth(authorization)
     if auth_error:
         return auth_error
@@ -61,6 +98,7 @@ async def chat_completions(request: Request, authorization: str | None = Header(
             code="backend_unavailable",
         )
     payload["model"] = instance.model_id
+    logged_request_payload = copy.deepcopy(payload)
 
     stream = bool(payload.get("stream", False))
     backend_endpoint = f"{instance.backend_url}/v1/chat/completions"
@@ -70,31 +108,95 @@ async def chat_completions(request: Request, authorization: str | None = Header(
             async with httpx.AsyncClient(timeout=None) as client:
                 response = await client.post(backend_endpoint, json=payload, headers=forward_headers(request))
         except httpx.ConnectError:
-            return openai_error_response(
+            error_response = openai_error_response(
                 f"Could not connect to llama-server at {instance.backend_url}",
                 status_code=503,
                 error_type="backend_connection_error",
                 code="backend_unavailable",
             )
+            _log_exchange(
+                request_id=request_id,
+                endpoint="/v1/chat/completions",
+                model_id=instance.model_id,
+                request_payload=logged_request_payload,
+                status_code=error_response.status_code,
+                response_body=_json_response_body(error_response),
+                started_at=started_at,
+                stream=False,
+                error="backend_connect_error",
+            )
+            return error_response
         except httpx.HTTPError as exc:
-            return openai_error_response(
+            error_response = openai_error_response(
                 f"Backend request failed: {exc}",
                 status_code=502,
                 error_type="backend_error",
                 code="backend_error",
             )
+            _log_exchange(
+                request_id=request_id,
+                endpoint="/v1/chat/completions",
+                model_id=instance.model_id,
+                request_payload=logged_request_payload,
+                status_code=error_response.status_code,
+                response_body=_json_response_body(error_response),
+                started_at=started_at,
+                stream=False,
+                error=str(exc),
+            )
+            return error_response
 
         if response.status_code >= 400:
-            return backend_error_response(response.status_code, response.content)
+            error_response = backend_error_response(response.status_code, response.content)
+            _log_exchange(
+                request_id=request_id,
+                endpoint="/v1/chat/completions",
+                model_id=instance.model_id,
+                request_payload=logged_request_payload,
+                status_code=error_response.status_code,
+                response_body=_json_response_body(error_response),
+                started_at=started_at,
+                stream=False,
+                error="backend_error_response",
+            )
+            return error_response
         try:
             response_json = response.json()
         except json.JSONDecodeError:
-            return openai_error_response(
+            error_response = openai_error_response(
                 "Backend returned a non-JSON response",
                 status_code=502,
                 error_type="backend_error",
                 code="backend_non_json_response",
             )
+            _log_exchange(
+                request_id=request_id,
+                endpoint="/v1/chat/completions",
+                model_id=instance.model_id,
+                request_payload=logged_request_payload,
+                status_code=error_response.status_code,
+                response_body={
+                    "proxy_error": _json_response_body(error_response),
+                    "backend_body": decode_response_body(
+                        response.content,
+                        response.headers.get("content-type"),
+                    ),
+                },
+                started_at=started_at,
+                stream=False,
+                error="backend_non_json_response",
+            )
+            return error_response
+        _log_exchange(
+            request_id=request_id,
+            endpoint="/v1/chat/completions",
+            model_id=instance.model_id,
+            request_payload=logged_request_payload,
+            status_code=response.status_code,
+            response_body=response_json,
+            started_at=started_at,
+            stream=False,
+        )
         return JSONResponse(status_code=response.status_code, content=response_json)
 
     client = httpx.AsyncClient(timeout=None)
@@ -108,32 +210,89 @@ async def chat_completions(request: Request, authorization: str | None = Header(
         backend_response = await client.send(backend_request, stream=True)
     except httpx.ConnectError:
         await client.aclose()
-        return openai_error_response(
+        error_response = openai_error_response(
             f"Could not connect to llama-server at {instance.backend_url}",
             status_code=503,
             error_type="backend_connection_error",
             code="backend_unavailable",
         )
+        _log_exchange(
+            request_id=request_id,
+            endpoint="/v1/chat/completions",
+            model_id=instance.model_id,
+            request_payload=logged_request_payload,
+            status_code=error_response.status_code,
+            response_body=_json_response_body(error_response),
+            started_at=started_at,
+            stream=True,
+            error="backend_connect_error",
+        )
+        return error_response
     except httpx.HTTPError as exc:
         await client.aclose()
-        return openai_error_response(
+        error_response = openai_error_response(
             f"Backend request failed: {exc}",
             status_code=502,
             error_type="backend_error",
             code="backend_error",
         )
+        _log_exchange(
+            request_id=request_id,
+            endpoint="/v1/chat/completions",
+            model_id=instance.model_id,
+            request_payload=logged_request_payload,
+            status_code=error_response.status_code,
+            response_body=_json_response_body(error_response),
+            started_at=started_at,
+            stream=True,
+            error=str(exc),
+        )
+        return error_response
 
     if backend_response.status_code >= 400:
         body = await backend_response.aread()
         await backend_response.aclose()
         await client.aclose()
-        return backend_error_response(backend_response.status_code, body)
+        error_response = backend_error_response(backend_response.status_code, body)
+        _log_exchange(
+            request_id=request_id,
+            endpoint="/v1/chat/completions",
+            model_id=instance.model_id,
+            request_payload=logged_request_payload,
+            status_code=error_response.status_code,
+            response_body=_json_response_body(error_response),
+            started_at=started_at,
+            stream=True,
+            error="backend_error_response",
+        )
+        return error_response
 
     async def stream_backend() -> Any:
+        chunks: list[bytes] = []
+        stream_error: str | None = None
         try:
             async for chunk in backend_response.aiter_raw():
+                chunks.append(chunk)
                 yield chunk
+        except asyncio.CancelledError:
+            stream_error = "client_disconnected"
+            raise
+        except Exception as exc:
+            stream_error = str(exc)
+            raise
         finally:
+            media_type = backend_response.headers.get("content-type", "text/event-stream")
+            _log_exchange(
+                request_id=request_id,
+                endpoint="/v1/chat/completions",
+                model_id=instance.model_id,
+                request_payload=logged_request_payload,
+                status_code=backend_response.status_code,
+                response_body=decode_response_body(b"".join(chunks), media_type),
+                started_at=started_at,
+                stream=True,
+                error=stream_error,
+            )
             await backend_response.aclose()
             await client.aclose()
 
@@ -147,6 +306,8 @@ async def chat_completions(request: Request, authorization: str | None = Header(
 
 @router.post("/v1/embeddings")
 async def embeddings(request: Request, authorization: str | None = Header(default=None)) -> JSONResponse:
+    request_id = str(uuid.uuid4())
+    started_at = time.time()
     auth_error = require_auth(authorization)
     if auth_error:
         return auth_error
@@ -181,6 +342,7 @@ async def embeddings(request: Request, authorization: str | None = Header(defaul
             code="backend_unavailable",
         )
     payload["model"] = instance.model_id
+    logged_request_payload = copy.deepcopy(payload)
 
     try:
         async with httpx.AsyncClient(timeout=None) as client:
@@ -190,31 +352,95 @@ async def embeddings(request: Request, authorization: str | None = Header(defaul
                 headers=forward_headers(request),
             )
     except httpx.ConnectError:
-        return openai_error_response(
+        error_response = openai_error_response(
             f"Could not connect to llama-server at {instance.backend_url}",
             status_code=503,
             error_type="backend_connection_error",
             code="backend_unavailable",
         )
+        _log_exchange(
+            request_id=request_id,
+            endpoint="/v1/embeddings",
+            model_id=instance.model_id,
+            request_payload=logged_request_payload,
+            status_code=error_response.status_code,
+            response_body=_json_response_body(error_response),
+            started_at=started_at,
+            stream=False,
+            error="backend_connect_error",
+        )
+        return error_response
     except httpx.HTTPError as exc:
-        return openai_error_response(
+        error_response = openai_error_response(
             f"Backend request failed: {exc}",
             status_code=502,
             error_type="backend_error",
             code="backend_error",
         )
+        _log_exchange(
+            request_id=request_id,
+            endpoint="/v1/embeddings",
+            model_id=instance.model_id,
+            request_payload=logged_request_payload,
+            status_code=error_response.status_code,
+            response_body=_json_response_body(error_response),
+            started_at=started_at,
+            stream=False,
+            error=str(exc),
+        )
+        return error_response
 
     if response.status_code >= 400:
-        return backend_error_response(response.status_code, response.content)
+        error_response = backend_error_response(response.status_code, response.content)
+        _log_exchange(
+            request_id=request_id,
+            endpoint="/v1/embeddings",
+            model_id=instance.model_id,
+            request_payload=logged_request_payload,
+            status_code=error_response.status_code,
+            response_body=_json_response_body(error_response),
+            started_at=started_at,
+            stream=False,
+            error="backend_error_response",
+        )
+        return error_response
     try:
         response_json = response.json()
     except json.JSONDecodeError:
-        return openai_error_response(
+        error_response = openai_error_response(
             "Backend returned a non-JSON response",
             status_code=502,
             error_type="backend_error",
             code="backend_non_json_response",
         )
+        _log_exchange(
+            request_id=request_id,
+            endpoint="/v1/embeddings",
+            model_id=instance.model_id,
+            request_payload=logged_request_payload,
+            status_code=error_response.status_code,
+            response_body={
+                "proxy_error": _json_response_body(error_response),
+                "backend_body": decode_response_body(
+                    response.content,
+                    response.headers.get("content-type"),
+                ),
+            },
+            started_at=started_at,
+            stream=False,
+            error="backend_non_json_response",
+        )
+        return error_response
+    _log_exchange(
+        request_id=request_id,
+        endpoint="/v1/embeddings",
+        model_id=instance.model_id,
+        request_payload=logged_request_payload,
+        status_code=response.status_code,
+        response_body=response_json,
+        started_at=started_at,
+        stream=False,
+    )
     return JSONResponse(status_code=response.status_code, content=response_json)
 
 

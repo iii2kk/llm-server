@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .api import router
 from .backend import registry
+from .request_logs import request_logger
 
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
@@ -25,6 +26,7 @@ logging.getLogger("uvicorn.access").addFilter(SuppressStatusAccessLog())
 
 @contextlib.asynccontextmanager
 async def lifespan(_app: FastAPI):
+    request_logger.cleanup()
     try:
         yield
     finally:
