@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Request Logs - Local LLM Server</title>
+  <link rel="stylesheet" href="/static/app.css?v=request-logs-page-20260705">
+</head>
+<body class="request-logs-page">
+  <main class="request-logs-main">
+    <header>
+      <h1>Request Logs</h1>
+      <div class="header-controls">
+        <a class="button-link neutral compact" href="/">Back</a>
+        <div class="field" style="max-width: 320px">
+          <label for="apiKey">Proxy API Key</label>
+          <input id="apiKey" type="password" placeholder="PROXY_API_KEY">
+        </div>
+      </div>
+    </header>
+
+    <section class="panel request-log-panel request-log-page-panel">
+      <div class="toolbar request-log-toolbar">
+        <h2>Request Logs</h2>
+        <button id="requestLogRefreshBtn" class="neutral compact" type="button">Refresh</button>
+      </div>
+      <div class="request-log-controls">
+        <div class="field">
+          <label for="requestLogModel">Model</label>
+          <select id="requestLogModel">
+            <option value="">All models</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="requestLogDate">Date</label>
+          <select id="requestLogDate">
+            <option value="">All dates</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="requestLogEndpoint">Endpoint</label>
+          <select id="requestLogEndpoint">
+            <option value="">All endpoints</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="requestLogStatus">Status</label>
+          <select id="requestLogStatus">
+            <option value="">All</option>
+            <option value="success">success</option>
+            <option value="error">error</option>
+          </select>
+        </div>
+        <div class="field request-log-search">
+          <label for="requestLogSearch">Search</label>
+          <input id="requestLogSearch" type="search" placeholder="prompt, response, error">
+        </div>
+      </div>
+      <div class="request-log-fields" id="requestLogFields" aria-label="Visible columns"></div>
+      <div class="request-log-page-layout">
+        <div class="request-log-page-list">
+          <div class="table-wrap request-log-table-wrap">
+            <table class="request-log-table">
+              <thead id="requestLogHead"></thead>
+              <tbody id="requestLogRows"></tbody>
+            </table>
+          </div>
+          <div class="request-log-footer">
+            <p class="meta" id="requestLogMeta"></p>
+            <button id="requestLogLoadMoreBtn" class="neutral compact" type="button" hidden>Load more</button>
+          </div>
+        </div>
+        <div class="request-log-detail" id="requestLogDetail" hidden>
+          <div class="request-log-tabs" id="requestLogTabs">
+            <button class="neutral compact" data-log-tab="summary" type="button">Summary</button>
+            <button class="neutral compact" data-log-tab="request" type="button">Request</button>
+            <button class="neutral compact" data-log-tab="response" type="button">Response</button>
+            <button class="neutral compact" data-log-tab="raw" type="button">Raw JSON</button>
+          </div>
+          <div id="requestLogDetailPre" class="request-log-detail-body"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/request-logs.js?v=request-logs-page-20260705"></script>
+</body>
+</html>

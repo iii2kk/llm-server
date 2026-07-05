@@ -69,6 +69,10 @@ def create_app() -> FastAPI:
     async def index() -> FileResponse:
         return FileResponse(WEB_DIR / "index.html")
 
+    @application.get("/request-logs", response_class=FileResponse)
+    async def request_logs() -> FileResponse:
+        return FileResponse(WEB_DIR / "request-logs.html")
+
     return application
 
 

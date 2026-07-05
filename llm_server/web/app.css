@@ -172,6 +172,32 @@ button.compact {
   padding: 6px 8px;
   font-size: 0.78rem;
 }
+.button-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 38px;
+  border-radius: 6px;
+  padding: 9px 12px;
+  color: #fff;
+  background: var(--accent);
+  font: 700 0.86rem ui-sans-serif, system-ui, sans-serif;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.button-link.neutral {
+  color: var(--ink);
+  background: #eef1ed;
+  border: 1px solid var(--line);
+}
+.button-link.compact {
+  min-height: 32px;
+  padding: 6px 8px;
+  font-size: 0.78rem;
+}
+.button-link:hover {
+  filter: brightness(1.04);
+}
 dialog.settings-dialog {
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -333,6 +359,11 @@ th {
 .request-log-toolbar {
   margin-bottom: 12px;
 }
+.request-logs-page main,
+.request-logs-main {
+  width: min(1680px, calc(100% - 28px));
+  padding-bottom: 24px;
+}
 .request-log-toolbar .field {
   flex: 0 0 auto;
 }
@@ -405,6 +436,28 @@ th {
 }
 .request-log-detail {
   margin-top: 12px;
+}
+.request-log-page-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(360px, 0.9fr);
+  gap: 12px;
+  align-items: start;
+  min-width: 0;
+}
+.request-log-page-list {
+  min-width: 0;
+}
+.request-log-page-panel .request-log-table-wrap {
+  max-height: calc(100vh - 250px);
+}
+.request-log-page-panel .request-log-detail {
+  position: sticky;
+  top: 12px;
+  margin-top: 0;
+  min-width: 0;
+}
+.request-log-page-panel .request-log-detail-body {
+  max-height: calc(100vh - 190px);
 }
 .request-log-tabs {
   display: flex;
@@ -615,13 +668,15 @@ pre {
   .header-controls {
     width: 100%;
     align-items: end;
-    justify-content: space-between;
+    justify-content: flex-start;
+    flex-wrap: wrap;
   }
   .status-json-popover {
     left: 0;
     right: auto;
   }
   main { width: min(100% - 18px, 1240px); padding: 14px 0 340px; }
+  .request-logs-page main { width: min(100% - 18px, 1680px); padding: 14px 0 24px; }
   body.logs-collapsed main { padding-bottom: 88px; }
   .log-panel {
     left: 9px;
@@ -633,6 +688,18 @@ pre {
   }
   .request-log-controls {
     grid-template-columns: 1fr;
+  }
+  .request-log-page-layout {
+    grid-template-columns: 1fr;
+  }
+  .request-log-page-panel .request-log-detail {
+    position: static;
+  }
+  .request-log-page-panel .request-log-table-wrap {
+    max-height: 430px;
+  }
+  .request-log-page-panel .request-log-detail-body {
+    max-height: 520px;
   }
   .request-log-footer {
     align-items: flex-start;
