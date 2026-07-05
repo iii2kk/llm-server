@@ -121,9 +121,9 @@ embeddingではpooling方式やモデル構造により、入力全体を1回の
 
 ### MTPの注意点
 
-MTPはMTPヘッドを内包し、GGUFメタデータに`*.nextn_predict_layers`を持つ対応architecture（現在はQwen3.5/3.6、Step3.5系、Cohere2 MoE）で利用できます。`MTP: auto`では対応モデルだけに`--spec-type draft-mtp`を追加し、非対応モデルの起動方法は変更しません。生成レスポンスの`timings.draft_n`と`timings.draft_n_accepted`で、draft token数と受理数を確認できます。
+MTPは、MTPヘッドを内包しGGUFメタデータに`*.nextn_predict_layers`を持つ対応architecture（現在はQwen3.5/3.6、Step3.5系、Cohere2 MoE）と、Gemma4本体GGUFの同じディレクトリに`mtp*.gguf`のGemma4 assistant draftモデルを置く構成で利用できます。`MTP: auto`では対応モデルだけに`--spec-type draft-mtp`を追加し、外部draftモデルを検出した場合は`--spec-draft-model`も追加します。非対応モデルの起動方法は変更しません。生成レスポンスの`timings.draft_n`と`timings.draft_n_accepted`で、draft token数と受理数を確認できます。
 
-現在のUIはMTPヘッド内包GGUFを対象としています。本体とMTP assistantが別GGUFになっている構成の`--spec-draft-model`指定には対応していません。
+外部draftモデルは、同一ディレクトリ内の`mtp*.gguf`から自動検出します。明示的な`--spec-draft-model`パス指定のUIはまだありません。
 
 > [!IMPORTANT]
 > llama.cppで内包型MTPに対応するarchitectureが追加された場合は、`llm_server/models.py`の`EMBEDDED_MTP_ARCHITECTURES`も更新してください。更新しないと、`*.nextn_predict_layers`を持つ新しい対応GGUFでも`MTP: auto`では検出されません。llama.cppの各model実装で`LLM_GRAPH_TYPE_DECODER_MTP`を処理するarchitectureを確認し、検出対象とテストを追加してください。

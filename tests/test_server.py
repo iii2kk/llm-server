@@ -283,6 +283,45 @@ class BackendSettingsTests(unittest.TestCase):
         self.assertEqual(command[command.index("--spec-type") + 1], "draft-mtp")
         self.assertEqual(command[command.index("--spec-draft-n-max") + 1], "4")
 
+    def test_external_mtp_draft_model_is_detected_and_added_to_command(self) -> None:
+        model = self.root / "gemma4.gguf"
+        draft_model = self.root / "mtp-gemma4.gguf"
+        write_gguf(model, [("general.architecture", 8, "gemma4")])
+        write_gguf(
+            draft_model,
+            [
+                ("general.architecture", 8, "gemma4-assistant"),
+                ("gemma4-assistant.nextn_predict_layers", 4, 4),
+            ],
+        )
+
+        settings = server.normalize_backend_settings(
+            "gemma4.gguf",
+            model,
+            {"mtp": "auto", "mtp_draft_tokens": 3, "gpu_layers": "all"},
+        )
+
+        self.assertTrue(settings["effective_mtp"])
+        self.assertEqual(settings["mtp_type"], "external")
+        self.assertEqual(settings["mtp_draft_path"], str(draft_model.resolve()))
+
+        fake_bin_dir = self.root / "external-mtp-bin"
+        fake_bin_dir.mkdir()
+        llama_server = fake_bin_dir / "llama-server"
+        llama_server.write_text("#!/bin/sh\n", encoding="ascii")
+        llama_server.chmod(0o755)
+
+        command = server.build_llama_command(
+            settings,
+            model=model,
+            port=9999,
+            llama_bin_dir=fake_bin_dir,
+        )
+
+        self.assertEqual(command[command.index("--spec-type") + 1], "draft-mtp")
+        self.assertEqual(command[command.index("--spec-draft-model") + 1], str(draft_model.resolve()))
+        self.assertEqual(command[command.index("--spec-draft-ngl") + 1], "all")
+
     def test_mtp_off_does_not_add_speculative_flags(self) -> None:
         model = self.root / "mtp-off.gguf"
         write_gguf(

@@ -146,6 +146,11 @@ def build_llama_command(
                 str(settings.get("mtp_draft_tokens", 3)),
             ]
         )
+        mtp_draft_path = settings.get("mtp_draft_path")
+        if mtp_draft_path:
+            command.extend(["--spec-draft-model", str(mtp_draft_path)])
+            if gpu_layers is not None:
+                command.extend(["--spec-draft-ngl", gpu_layers])
 
     return command
 

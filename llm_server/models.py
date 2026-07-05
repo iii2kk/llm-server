@@ -22,6 +22,8 @@ from .config import (
 
 SHARDED_GGUF_RE = re.compile(r"^(?P<base>.+)-(?P<index>\d{5})-of-(?P<count>\d{5})\.gguf$", re.IGNORECASE)
 EMBEDDED_MTP_ARCHITECTURES = {"qwen35", "qwen35moe", "step35", "cohere2moe"}
+EXTERNAL_MTP_ARCHITECTURES = {"gemma4"}
+EXTERNAL_MTP_DRAFT_ARCHITECTURES = {"gemma4-assistant"}
 GGUF_METADATA_SEARCH_BYTES = 32 * 1024 * 1024
 
 def display_model_path(relative_path: Path) -> tuple[str, bool, bool]:
@@ -39,6 +41,10 @@ def is_mmproj_file(path: Path) -> bool:
     return path.name.lower().startswith("mmproj") and path.suffix.lower() == ".gguf"
 
 
+def is_mtp_draft_file(path: Path) -> bool:
+    return path.name.lower().startswith("mtp") and path.suffix.lower() == ".gguf"
+
+
 def find_mmproj_for_model(model: Path) -> Path | None:
     candidates = sorted(
         path.resolve()
@@ -48,6 +54,23 @@ def find_mmproj_for_model(model: Path) -> Path | None:
     if not candidates:
         return None
     return candidates[0]
+
+
+def find_mtp_draft_for_model(model: Path) -> Path | None:
+    candidates = sorted(
+        path.resolve()
+        for path in model.parent.glob("mtp*.gguf")
+        if path.is_file() and path.resolve() != model.resolve()
+    )
+    for candidate in candidates:
+        metadata = read_gguf_metadata(candidate)
+        architecture = str(metadata["architecture"] or "").lower()
+        if (
+            metadata["mtp_layers"] > 0
+            and architecture in EXTERNAL_MTP_DRAFT_ARCHITECTURES
+        ):
+            return candidate
+    return None
 
 
 def _gguf_read_exact(handle: Any, size: int) -> bytes:
@@ -261,6 +284,20 @@ def resolve_llama_backend(value: Any) -> tuple[str, Path]:
 
 def effective_model_config(model: Path, settings: dict[str, Any]) -> dict[str, Any]:
     metadata = read_gguf_metadata(model)
+    architecture_name = str(metadata["architecture"] or "").lower()
+    mtp_draft_path = find_mtp_draft_for_model(model)
+    mtp_draft_metadata = read_gguf_metadata(mtp_draft_path) if mtp_draft_path is not None else None
+    external_mtp_supported = (
+        architecture_name in EXTERNAL_MTP_ARCHITECTURES
+        and mtp_draft_metadata is not None
+        and mtp_draft_metadata["mtp_layers"] > 0
+    )
+    mtp_layers = (
+        metadata["mtp_layers"]
+        if metadata["mtp_layers"] > 0
+        else int(mtp_draft_metadata["mtp_layers"]) if mtp_draft_metadata is not None else 0
+    )
+    mtp_supported = bool(metadata["mtp_supported"] or external_mtp_supported)
     configured_mode = validate_model_mode(settings.get("mode"))
     configured_pooling = validate_pooling(settings.get("pooling"))
     configured_mtp = validate_mtp_mode(settings.get("mtp"))
@@ -278,16 +315,23 @@ def effective_model_config(model: Path, settings: dict[str, Any]) -> dict[str, A
 
     if configured_mtp == "on" and effective_mode != "chat":
         raise ValueError("MTP can only be enabled for chat models")
-    if configured_mtp == "on" and metadata["mtp_layers"] == 0:
+    if configured_mtp == "on" and mtp_layers == 0:
         raise ValueError("MTP is enabled but the GGUF has no nextn_predict_layers metadata")
-    if configured_mtp == "on" and not metadata["mtp_supported"]:
+    if configured_mtp == "on" and not mtp_supported:
         raise ValueError(
-            f"MTP is not supported for embedded heads on architecture: {metadata['architecture'] or 'unknown'}"
+            f"MTP is not supported for architecture: {metadata['architecture'] or 'unknown'}"
         )
-    effective_mtp = effective_mode == "chat" and metadata["mtp_supported"] and configured_mtp != "off"
+    effective_mtp = effective_mode == "chat" and mtp_supported and configured_mtp != "off"
+    mtp_type = "none"
+    if effective_mtp:
+        mtp_type = "external" if external_mtp_supported else "embedded"
 
     return {
         **metadata,
+        "mtp_layers": mtp_layers,
+        "mtp_supported": mtp_supported,
+        "mtp_draft_path": str(mtp_draft_path or ""),
+        "mtp_type": mtp_type,
         "configured_mode": configured_mode,
         "configured_pooling": configured_pooling,
         "configured_mtp": configured_mtp,
@@ -311,6 +355,8 @@ def normalize_backend_settings(model_id: str, model_path: Path, settings: dict[s
     normalized["effective_mode"] = config["effective_mode"]
     normalized["effective_pooling"] = config["effective_pooling"]
     normalized["effective_mtp"] = config["effective_mtp"]
+    normalized["mtp_draft_path"] = config["mtp_draft_path"]
+    normalized["mtp_type"] = config["mtp_type"]
     return normalized
 
 
@@ -330,7 +376,7 @@ def model_options(
 
     models: list[dict[str, Any]] = []
     for path in sorted(root.rglob("*.gguf"), key=lambda item: str(item).lower()):
-        if is_mmproj_file(path):
+        if is_mmproj_file(path) or is_mtp_draft_file(path):
             continue
         resolved = path.resolve()
         try:
