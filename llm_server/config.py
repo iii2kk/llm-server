@@ -48,6 +48,7 @@ LOG_BUFFER_MAX_BYTES = int(os.getenv("LOG_BUFFER_MAX_BYTES", "1048576"))
 MODEL_LOAD_TIMEOUT_SECONDS = float(os.getenv("MODEL_LOAD_TIMEOUT_SECONDS", "60"))
 SETTINGS_DIR = BASE_DIR / ".llm-server"
 MODEL_SETTINGS_FILE = SETTINGS_DIR / "model-settings.json"
+DEFAULT_STARTUP_PROFILE_FILE = SETTINGS_DIR / "startup-profile.json"
 REQUEST_RESPONSE_LOG_DIR = Path(
     os.getenv("REQUEST_RESPONSE_LOG_DIR", str(SETTINGS_DIR / "request-logs"))
 ).expanduser()

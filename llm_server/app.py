@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
+import os
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -24,12 +26,34 @@ class SuppressStatusAccessLog(logging.Filter):
 logging.getLogger("uvicorn.access").addFilter(SuppressStatusAccessLog())
 
 
+async def autoload_startup_profile() -> None:
+    profile_path = os.getenv("MODEL_STARTUP_FILE", "").strip()
+    if not profile_path:
+        return
+    try:
+        result = await registry.load_startup_profile(profile_path)
+    except Exception as exc:
+        logging.getLogger(__name__).warning("Startup profile was not loaded: %s", exc)
+        return
+    logging.getLogger(__name__).info(
+        "Loaded startup profile %s: %s model(s), %s error(s)",
+        result["path"],
+        result["loaded"],
+        len(result["errors"]),
+    )
+
+
 @contextlib.asynccontextmanager
 async def lifespan(_app: FastAPI):
     request_logger.cleanup()
+    startup_task = asyncio.create_task(autoload_startup_profile())
     try:
         yield
     finally:
+        if not startup_task.done():
+            startup_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await startup_task
         await registry.stop_all()
 
 

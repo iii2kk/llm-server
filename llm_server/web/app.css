@@ -138,8 +138,13 @@ input, select {
 .actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: end;
   gap: 8px;
   margin-top: 14px;
+}
+.startup-profile-field {
+  flex: 1 1 280px;
+  max-width: 420px;
 }
 button {
   border: 0;
@@ -325,6 +330,99 @@ th {
   background: #e8f3ee;
   box-shadow: inset 3px 0 0 var(--accent);
 }
+.request-log-toolbar {
+  margin-bottom: 12px;
+}
+.request-log-toolbar .field {
+  flex: 0 0 auto;
+}
+.request-log-controls {
+  display: grid;
+  grid-template-columns: 1.4fr 0.8fr 0.9fr 0.7fr minmax(180px, 1.2fr);
+  gap: 10px;
+  align-items: end;
+  min-width: 0;
+}
+.request-log-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin: 12px 0 8px;
+  min-width: 0;
+}
+.request-log-field {
+  margin: 0;
+  font-size: 0.78rem;
+}
+.request-log-table-wrap {
+  max-height: 430px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.request-log-table {
+  min-width: 980px;
+}
+.request-log-table th,
+.request-log-table td {
+  width: auto;
+}
+.request-log-table tbody tr {
+  cursor: pointer;
+}
+.request-log-table tbody tr:hover {
+  background: #f3f6f2;
+}
+.request-log-table tbody tr.selected {
+  background: #e8f3ee;
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.request-log-cell {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.request-log-cell-ts {
+  white-space: nowrap;
+  width: 150px;
+}
+.request-log-cell-duration,
+.request-log-cell-status,
+.request-log-cell-endpoint {
+  white-space: nowrap;
+}
+.request-log-cell-request,
+.request-log-cell-response {
+  min-width: 220px;
+}
+.request-log-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 10px;
+}
+.request-log-footer .meta {
+  margin: 0;
+}
+.request-log-detail {
+  margin-top: 12px;
+}
+.request-log-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.request-log-tabs button.active {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.request-log-detail-pre {
+  max-height: 520px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
 .subtext {
   display: block;
   margin-top: 3px;
@@ -460,6 +558,13 @@ pre {
   }
   .toolbar {
     flex-wrap: wrap;
+  }
+  .request-log-controls {
+    grid-template-columns: 1fr;
+  }
+  .request-log-footer {
+    align-items: flex-start;
+    flex-direction: column;
   }
   table { font-size: 0.78rem; }
 }

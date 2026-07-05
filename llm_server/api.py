@@ -6,9 +6,12 @@ from .admin_api import (
     api_logs,
     api_logs_stream,
     api_models,
+    api_request_log_options,
+    api_request_logs,
     api_restart,
     api_start,
     api_status,
+    api_startup_profile,
     api_stop,
     router as admin_router,
 )

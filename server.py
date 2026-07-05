@@ -13,9 +13,12 @@ from llm_server.api import (
     api_logs,
     api_logs_stream,
     api_models,
+    api_request_log_options,
+    api_request_logs,
     api_restart,
     api_start,
     api_status,
+    api_startup_profile,
     api_stop,
     chat_completions,
     embeddings,
@@ -68,6 +71,18 @@ def build_llama_command(
 
 
 if __name__ == "__main__":
+    import argparse
+    import os
+
     import uvicorn
 
-    uvicorn.run("server:app", host=PROXY_HOST, port=PROXY_PORT, reload=False)
+    parser = argparse.ArgumentParser(description="Run the local LLM proxy server.")
+    parser.add_argument(
+        "--startup-profile",
+        help="JSON file with models and default selections to load when the server starts.",
+    )
+    args = parser.parse_args()
+    if args.startup_profile:
+        os.environ["MODEL_STARTUP_FILE"] = args.startup_profile
+
+    uvicorn.run(app, host=PROXY_HOST, port=PROXY_PORT, reload=False)

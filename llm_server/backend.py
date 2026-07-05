@@ -44,8 +44,13 @@ from .settings_store import (
     load_default_model_ids,
     load_recent_model_ids,
     load_saved_model_settings,
+    load_startup_profile,
+    resolve_startup_profile_path,
     saved_settings_payload,
+    startup_profile_default_models,
+    startup_profile_models,
     write_saved_model_settings,
+    write_startup_profile,
 )
 
 logger = logging.getLogger(__name__)
@@ -318,6 +323,81 @@ class BackendRegistry:
             "backend_reachable": latest["backend_reachable"] if latest else False,
             "default_model_ids": default_model_ids,
             "backends": statuses,
+        }
+
+    async def startup_profile_snapshot(self) -> dict[str, Any]:
+        async with self._lock:
+            instances = sorted(
+                [instance for instance in self.instances.values() if instance.is_active()],
+                key=lambda instance: instance.started_at or 0,
+            )
+            default_model_ids = dict(self.default_model_ids)
+
+        models = []
+        for instance in instances:
+            settings = dict(instance.settings or self.saved_settings.get(instance.model_id, {}))
+            settings["model"] = instance.model_id
+            models.append(saved_settings_payload(instance.model_id, settings))
+        return {
+            "version": 1,
+            "default_models": {
+                purpose: model_id
+                for purpose, model_id in sorted(default_model_ids.items())
+                if purpose in DEFAULT_MODEL_PURPOSES and model_id
+            },
+            "models": models,
+        }
+
+    async def save_startup_profile(self, path: str | Path | None = None) -> dict[str, Any]:
+        snapshot = await self.startup_profile_snapshot()
+        profile_path = write_startup_profile(
+            path=path,
+            models=list(snapshot["models"]),
+            default_model_ids=dict(snapshot["default_models"]),
+        )
+        return {
+            "ok": True,
+            "path": str(profile_path),
+            "count": len(snapshot["models"]),
+            "profile": snapshot,
+        }
+
+    async def load_startup_profile(self, path: str | Path) -> dict[str, Any]:
+        profile_path = resolve_startup_profile_path(path)
+        raw = load_startup_profile(profile_path)
+        models = startup_profile_models(raw)
+        default_model_ids = startup_profile_default_models(raw)
+        results = []
+        errors = []
+
+        for settings in models:
+            try:
+                result = await self.start(settings, conflict_if_running=False)
+            except (OSError, ValueError) as exc:
+                error = {"model": settings.get("model"), "error": str(exc)}
+                errors.append(error)
+                logger.warning("Failed to autoload %s from %s: %s", settings.get("model"), profile_path, exc)
+                continue
+            if isinstance(result, JSONResponse):
+                message = result.body.decode("utf-8", errors="replace")
+                error = {"model": settings.get("model"), "error": message}
+                errors.append(error)
+                logger.warning("Failed to autoload %s from %s: %s", settings.get("model"), profile_path, message)
+                continue
+            results.append({"model": settings.get("model"), **result})
+
+        if default_model_ids is not None:
+            async with self._lock:
+                self.default_model_ids = default_model_ids
+            self._persist_settings()
+
+        return {
+            "ok": not errors,
+            "path": str(profile_path),
+            "loaded": len(results),
+            "errors": errors,
+            "results": results,
+            "default_model_ids": await self.default_model_ids_snapshot(),
         }
 
     async def start(self, settings: dict[str, Any], *, conflict_if_running: bool = True) -> dict[str, Any] | JSONResponse:

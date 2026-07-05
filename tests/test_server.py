@@ -4,6 +4,7 @@ import json
 import os
 import struct
 import tempfile
+import time
 import unittest
 from datetime import date, timedelta
 from pathlib import Path
@@ -13,7 +14,7 @@ import httpx
 from fastapi.testclient import TestClient
 
 import server
-from llm_server.request_logs import RequestResponseLogger
+from llm_server.request_logs import RequestResponseLogger, read_request_logs, request_log_options
 
 
 class EnvironmentTests(unittest.TestCase):
@@ -439,6 +440,67 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(registry.default_model_ids, {"embeddings": "embedding.gguf"})
 
+    async def test_startup_profile_save_uses_active_instances_and_defaults(self) -> None:
+        registry = server.BackendRegistry()
+        registry.default_model_ids = {"chat": "chat.gguf"}
+
+        class FakeInstance:
+            def __init__(self, model_id: str, started_at: float, active: bool = True) -> None:
+                self.model_id = model_id
+                self.started_at = started_at
+                self.settings = {"model": model_id, "backend": "rocm", "ctx_size": 4096}
+                self._active = active
+
+            def is_active(self) -> bool:
+                return self._active
+
+        registry.instances = {
+            "stopped.gguf": FakeInstance("stopped.gguf", 0, active=False),
+            "second.gguf": FakeInstance("second.gguf", 20),
+            "chat.gguf": FakeInstance("chat.gguf", 10),
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = await registry.save_startup_profile(Path(temp_dir) / "startup.json")
+            payload = json.loads(Path(result["path"]).read_text(encoding="utf-8"))
+
+        self.assertTrue(result["ok"])
+        self.assertEqual([item["model"] for item in payload["models"]], ["chat.gguf", "second.gguf"])
+        self.assertEqual(payload["default_models"], {"chat": "chat.gguf"})
+        self.assertEqual(payload["models"][0]["ctx_size"], 4096)
+
+    async def test_startup_profile_load_starts_models_and_applies_defaults(self) -> None:
+        registry = server.BackendRegistry()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile = Path(temp_dir) / "startup.json"
+            profile.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "default_models": {"chat": "chat.gguf", "embeddings": "embed.gguf"},
+                        "models": [
+                            {"model": "chat.gguf", "backend": "vulkan"},
+                            {"model": "embed.gguf", "mode": "embeddings"},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            start_mock = AsyncMock(return_value={"ok": True, "backend_reachable": True})
+            with (
+                patch.object(registry, "start", start_mock),
+                patch.object(registry, "_persist_settings"),
+            ):
+                result = await registry.load_startup_profile(profile)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["loaded"], 2)
+        self.assertEqual(registry.default_model_ids, {"chat": "chat.gguf", "embeddings": "embed.gguf"})
+        start_mock.assert_any_await({"model": "chat.gguf", "backend": "vulkan"}, conflict_if_running=False)
+        start_mock.assert_any_await({"model": "embed.gguf", "mode": "embeddings"}, conflict_if_running=False)
+
     def test_capability_errors(self) -> None:
         response = server.model_capability_error("chat.gguf", "chat", "embeddings")
         self.assertIsNotNone(response)
@@ -571,6 +633,73 @@ class RequestResponseLoggerTests(unittest.TestCase):
             self.assertFalse(old_log.exists())
             self.assertTrue(kept_log.exists())
 
+    def test_request_log_options_and_filters(self) -> None:
+        with tempfile.TemporaryDirectory() as log_dir:
+            root = Path(log_dir)
+            request_logger = RequestResponseLogger(root, retention_days=7)
+            now = time.time()
+            request_logger.log(
+                request_id="ok",
+                endpoint="/v1/chat/completions",
+                model_id="model.gguf",
+                request_payload={"model": "model.gguf", "messages": [{"role": "user", "content": "hello"}]},
+                status_code=200,
+                response_body={"choices": [{"message": {"content": "hi"}}]},
+                started_at=now - 0.1,
+                completed_at=now,
+            )
+            request_logger.log(
+                request_id="error",
+                endpoint="/v1/embeddings",
+                model_id="embedding.gguf",
+                request_payload={"model": "embedding.gguf", "input": ["hello"]},
+                status_code=500,
+                response_body={"error": {"message": "failed"}},
+                started_at=now - 0.2,
+                completed_at=now + 1,
+                error="backend_error_response",
+            )
+
+            options = request_log_options(root)
+            self.assertEqual(options["total"], 2)
+            self.assertIn("/v1/chat/completions", options["endpoints"])
+            self.assertEqual(options["status_counts"], {"success": 1, "error": 1})
+
+            data = read_request_logs(log_dir=root, status="success", query="hello")
+            self.assertEqual(data["total"], 1)
+            record = data["records"][0]["record"]
+            self.assertEqual(record["model"], "model.gguf")
+            self.assertEqual(record["status"], "success")
+
+    def test_request_log_reader_compacts_large_numeric_arrays(self) -> None:
+        with tempfile.TemporaryDirectory() as log_dir:
+            root = Path(log_dir)
+            request_logger = RequestResponseLogger(root, retention_days=7)
+            now = time.time()
+            request_logger.log(
+                request_id="embedding",
+                endpoint="/v1/embeddings",
+                model_id="embedding.gguf",
+                request_payload={"model": "embedding.gguf", "input": ["hello"]},
+                status_code=200,
+                response_body={
+                    "data": [
+                        {
+                            "object": "embedding",
+                            "index": 0,
+                            "embedding": [float(index) for index in range(128)],
+                        }
+                    ],
+                },
+                started_at=now,
+                completed_at=now,
+            )
+
+            data = read_request_logs(log_dir=root)
+            embedding = data["records"][0]["record"]["response"]["body"]["data"][0]["embedding"]
+            self.assertEqual(embedding["omitted"], "numeric_array")
+            self.assertEqual(embedding["length"], 128)
+
 
 class WebUiTests(unittest.TestCase):
     def test_ui_and_static_assets_are_served(self) -> None:
@@ -580,20 +709,28 @@ class WebUiTests(unittest.TestCase):
             script = client.get("/static/app.js")
 
         self.assertEqual(index.status_code, 200)
-        self.assertIn('href="/static/app.css"', index.text)
-        self.assertIn('src="/static/app.js"', index.text)
+        self.assertIn('href="/static/app.css?v=', index.text)
+        self.assertIn('src="/static/app.js?v=', index.text)
         self.assertIn('id="settingsDialog"', index.text)
         self.assertIn('id="modelRows"', index.text)
+        self.assertIn('id="requestLogRows"', index.text)
+        self.assertIn('id="requestLogFields"', index.text)
         self.assertIn('id="defaultChatModel"', index.text)
+        self.assertIn('id="startupProfilePath"', index.text)
         self.assertIn('id="mtp"', index.text)
         self.assertIn('id="mtp_draft_tokens"', index.text)
         self.assertEqual(stylesheet.status_code, 200)
         self.assertIn(".settings-dialog", stylesheet.text)
+        self.assertIn(".request-log-table", stylesheet.text)
         self.assertEqual(script.status_code, 200)
         self.assertIn("function connectLogStream()", script.text)
+        self.assertIn("function loadRequestLogs(", script.text)
+        self.assertIn("/api/request-logs", script.text)
         self.assertIn("function updateModelRow(", script.text)
         self.assertIn("function setDefaultModel(", script.text)
         self.assertIn("/api/default-model", script.text)
+        self.assertIn("function saveStartupProfile(", script.text)
+        self.assertIn("/api/startup-profile", script.text)
         self.assertIn("function updateMtpControl()", script.text)
         self.assertNotIn("modelRows.innerHTML", script.text)
         self.assertNotIn("recentRows.innerHTML", script.text)

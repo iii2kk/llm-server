@@ -17,6 +17,7 @@ from .config import (
     MODEL_DIR,
 )
 from .models import grammar_options, model_options
+from .request_logs import read_request_logs, request_log_options
 from .responses import (
     apply_default_max_tokens,
     backend_error_response,
@@ -87,21 +88,71 @@ async def api_logs(request: Request, authorization: str | None = Header(default=
     return JSONResponse(await store.snapshot())
 
 
+@router.get("/api/request-logs/options")
+async def api_request_log_options(authorization: str | None = Header(default=None)) -> JSONResponse:
+    auth_error = require_auth(authorization)
+    if auth_error:
+        return auth_error
+    return JSONResponse(request_log_options())
+
+
+@router.get("/api/request-logs")
+async def api_request_logs(request: Request, authorization: str | None = Header(default=None)) -> JSONResponse:
+    auth_error = require_auth(authorization)
+    if auth_error:
+        return auth_error
+    params = request.query_params
+    try:
+        offset = int(params.get("offset", "0"))
+        limit = int(params.get("limit", "100"))
+    except ValueError:
+        return openai_error_response(
+            "offset and limit must be integers",
+            status_code=400,
+            code="invalid_request_log_pagination",
+        )
+    return JSONResponse(
+        read_request_logs(
+            model=params.get("model") or None,
+            log_date=params.get("date") or None,
+            endpoint=params.get("endpoint") or None,
+            status=params.get("status") or None,
+            query=params.get("q") or None,
+            offset=offset,
+            limit=limit,
+        )
+    )
+
+
 @router.get("/api/logs/stream")
 async def api_logs_stream(request: Request, authorization: str | None = Header(default=None)):
     auth_error = require_auth_or_query(request, authorization)
     if auth_error:
         return auth_error
     store = await registry.logs_for(request.query_params.get("model"))
-    if store is None:
-        return openai_error_response(
-            "No logs for model",
-            status_code=404,
-            param="model",
-            code="model_logs_not_found",
-        )
+    missing_snapshot = {
+        "run_id": 0,
+        "next_seq": 0,
+        "entries": [],
+        "truncated": False,
+        "load": {
+            "run_id": 0,
+            "state": "stopped",
+            "progress": None,
+        },
+    }
 
     async def stream_logs() -> Any:
+        if store is None:
+            yield sse_event("snapshot", missing_snapshot)
+            yield sse_event("state", missing_snapshot["load"])
+            while True:
+                if await request.is_disconnected():
+                    break
+                await asyncio.sleep(15)
+                yield ": keepalive\n\n"
+            return
+
         queue = await store.subscribe()
         try:
             snapshot = await store.snapshot()
@@ -210,3 +261,27 @@ async def api_default_model(request: Request, authorization: str | None = Header
     except ValueError as exc:
         return openai_error_response(str(exc), param="model", code="invalid_default_model")
 
+
+@router.post("/api/startup-profile")
+async def api_startup_profile(request: Request, authorization: str | None = Header(default=None)) -> JSONResponse:
+    auth_error = require_auth(authorization)
+    if auth_error:
+        return auth_error
+    try:
+        body = await request.body()
+        settings = json.loads(body) if body else {}
+        if not isinstance(settings, dict):
+            return openai_error_response("Request body must be a JSON object", code="invalid_json")
+        path = settings.get("path")
+        if path is not None and not isinstance(path, str):
+            return openai_error_response("path must be a string", param="path", code="invalid_startup_profile_path")
+        return JSONResponse(await registry.save_startup_profile(path))
+    except json.JSONDecodeError:
+        return openai_error_response("Request body must be valid JSON", code="invalid_json")
+    except OSError as exc:
+        return openai_error_response(
+            f"Failed to save startup profile: {exc}",
+            status_code=500,
+            error_type="startup_profile_error",
+            code="startup_profile_save_failed",
+        )

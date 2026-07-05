@@ -27,6 +27,7 @@ GRAMMAR_DEFAULT_MAX_TOKENS=256
 MODEL_LOAD_TIMEOUT_SECONDS=60
 REQUEST_RESPONSE_LOG_DIR=.llm-server/request-logs
 REQUEST_RESPONSE_LOG_RETENTION_DAYS=7
+MODEL_STARTUP_FILE=
 PROXY_API_KEY=
 ```
 
@@ -71,6 +72,18 @@ OpenAI互換APIのリクエスト/レスポンスは、モデルごとに `.llm-
 
 `/v1/models` の `id` がAPIで指定するモデル名です。既知の未ロードモデルを `model` に指定した場合、proxyが用途に合うモードでロードしてから転送します。`model` が未指定、`"local"`、または存在しない値の場合は、Running Modelsで設定した同用途の既定モデルへ転送します。既定モデルが起動していない場合は、最後に起動した同用途のモデルへフォールバックします。
 
+Running Modelsの `Save Startup Profile` は、現在ロード中のモデルとchat/embeddings別の既定モデルの組み合わせをJSONファイルへ保存します。パス欄を空にすると `.llm-server/startup-profile.json` に保存されます。保存した構成を次回起動時に自動ロードするには、以下のどちらかでファイルを指定します。
+
+```bash
+uv run python server.py --startup-profile .llm-server/startup-profile.json
+```
+
+```env
+MODEL_STARTUP_FILE=.llm-server/startup-profile.json
+```
+
+プロファイル内の相対パスはプロジェクトルートから解決されます。ロードはサーバー起動後にバックグラウンドで始まり、ロードできないモデルがあっても他のモデルのロードは続行されます。
+
 モデル用途はGGUF先頭のarchitecture、pooling、embedding次元数から自動判定します。Web UIの `Mode` と `Pooling` でモデルごとに上書きできます。embeddingモデルは `llama-server --embeddings` で起動されるため、同じGGUFをchat用とembedding用に同時ロードすることはありません。実行中モデルの用途を変更した場合は `Restart` してください。
 
 ## モデル起動設定
@@ -103,6 +116,8 @@ Web UIでモデルを選択すると、`Start` または `Restart` 時に以下�
 embeddingではpooling方式やモデル構造により、入力全体を1回のUBatchで処理する必要があります。この場合はContextが十分でも `UBatch` が入力token数より小さいと処理できません。長文をembeddingする場合は、`Context`、`Batch`、`UBatch` を想定する最大入力token数以上に設定してください。値を大きくするとメモリ消費も増えるため、ロードログと実際の入力長を見ながら調整します。
 
 設定はモデルごとに `.llm-server/model-settings.json` へ保存されます。Running Modelsの `Use` で選んだchat/embeddings別の既定モデルも同じファイルへ保存されます。APIリクエストで既知の未ロードモデルが自動ロードされる場合も、そのモデルの保存済み設定が使われます。実行中のモデルに変更を反映するには `Restart` を押してください。
+
+起動プロファイルは、保存時点で実行中またはロード中のモデルだけを `models` 配列に保存します。必要に応じてJSONを手編集し、`model`、`backend`、`ctx_size`、`mode` などWeb UIと同じ起動設定を調整できます。
 
 ### MTPの注意点
 
