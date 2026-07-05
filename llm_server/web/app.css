@@ -417,11 +417,83 @@ th {
   background: var(--accent);
   border-color: var(--accent);
 }
-.request-log-detail-pre {
+.request-log-detail-body {
   max-height: 520px;
+  overflow: auto;
+}
+.request-log-detail-pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+.request-response-view {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.response-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 8px;
+}
+.response-meta-item {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #fbfcfa;
+}
+.response-meta-item span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+.response-meta-item strong {
+  display: block;
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+  font-size: 0.9rem;
+}
+.response-section,
+.response-tool-call {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  background: #fff;
+}
+.response-section.error {
+  border-color: #efc4c8;
+  background: #fff8f8;
+}
+.response-section h3,
+.response-section summary,
+.response-tool-call summary {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  cursor: default;
+}
+.response-section summary,
+.response-tool-call summary {
+  cursor: pointer;
+}
+.response-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.55;
+  font-size: 0.9rem;
+}
+.response-code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  max-height: 280px;
 }
 .subtext {
   display: block;

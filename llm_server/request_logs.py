@@ -22,6 +22,8 @@ DEFAULT_LOG_LIMIT = 100
 
 def decode_response_body(content: bytes, content_type: str | None = None) -> Any:
     text = content.decode("utf-8", errors="replace")
+    if _is_sse_content(text, content_type):
+        return _decode_sse_response_body(text)
     if "json" in (content_type or "").lower():
         try:
             return json.loads(text)
@@ -318,6 +320,10 @@ def _compact_value(value: Any, *, depth: int) -> Any:
             }
         return [_compact_value(item, depth=depth + 1) for item in value]
     if isinstance(value, str):
+        if value.startswith("data:"):
+            decoded = _decode_sse_response_body(value)
+            if decoded != value:
+                return _compact_value(decoded, depth=depth + 1)
         if _looks_like_large_data(value):
             return {
                 "omitted": "large_string",
@@ -345,6 +351,172 @@ def _looks_like_large_data(value: str) -> bool:
     sample = value[:2048]
     base64_chars = sum(1 for char in sample if char.isalnum() or char in "+/=\n\r")
     return base64_chars / len(sample) > 0.96
+
+
+def _is_sse_content(text: str, content_type: str | None = None) -> bool:
+    return "text/event-stream" in (content_type or "").lower() or text.startswith("data:")
+
+
+def _decode_sse_response_body(text: str) -> Any:
+    events = _sse_data_events(text)
+    if not events:
+        return text
+
+    choices: dict[int, dict[str, Any]] = {}
+    usage: Any = None
+    done = False
+    chunk_count = 0
+    metadata: dict[str, Any] = {
+        "object": "chat.completion.stream",
+        "stream": True,
+    }
+
+    for event in events:
+        if event == "[DONE]":
+            done = True
+            continue
+        try:
+            chunk = json.loads(event)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(chunk, dict):
+            continue
+
+        chunk_count += 1
+        for key in ("id", "created", "model", "system_fingerprint"):
+            if key in chunk and key not in metadata:
+                metadata[key] = chunk[key]
+        if isinstance(chunk.get("usage"), dict):
+            usage = chunk["usage"]
+
+        for raw_choice in chunk.get("choices") or []:
+            if not isinstance(raw_choice, dict):
+                continue
+            try:
+                index = int(raw_choice.get("index", 0))
+            except (TypeError, ValueError):
+                index = 0
+            choice = choices.setdefault(
+                index,
+                {
+                    "index": index,
+                    "message": {},
+                    "finish_reason": None,
+                },
+            )
+            delta = raw_choice.get("delta") if isinstance(raw_choice.get("delta"), dict) else {}
+            message = raw_choice.get("message") if isinstance(raw_choice.get("message"), dict) else {}
+            _merge_stream_message(choice["message"], delta)
+            _merge_stream_message(choice["message"], message)
+            if raw_choice.get("finish_reason") is not None:
+                choice["finish_reason"] = raw_choice.get("finish_reason")
+
+    if not chunk_count:
+        return text
+
+    result = dict(metadata)
+    result["chunks"] = chunk_count
+    result["done"] = done
+    result["choices"] = [choices[index] for index in sorted(choices)]
+    if usage is not None:
+        result["usage"] = usage
+    return result
+
+
+def _sse_data_events(text: str) -> list[str]:
+    events: list[str] = []
+    data_lines: list[str] = []
+
+    def flush() -> None:
+        if data_lines:
+            events.append("\n".join(data_lines))
+            data_lines.clear()
+
+    for raw_line in text.splitlines():
+        line = raw_line.rstrip("\r")
+        if not line:
+            flush()
+            continue
+        if line.startswith(":"):
+            continue
+        if not line.startswith("data:"):
+            continue
+        data = line[5:]
+        if data.startswith(" "):
+            data = data[1:]
+        data_lines.append(data)
+    flush()
+    return events
+
+
+def _merge_stream_message(message: dict[str, Any], delta: dict[str, Any]) -> None:
+    role = delta.get("role")
+    if role and "role" not in message:
+        message["role"] = role
+    for key in ("content", "reasoning_content"):
+        if key in delta:
+            _append_message_text(message, key, delta.get(key))
+    if isinstance(delta.get("tool_calls"), list):
+        message["tool_calls"] = _merge_tool_calls(message.get("tool_calls"), delta["tool_calls"])
+    if isinstance(delta.get("function_call"), dict):
+        message["function_call"] = _merge_function_call(message.get("function_call"), delta["function_call"])
+
+
+def _append_message_text(message: dict[str, Any], key: str, value: Any) -> None:
+    text = _message_part_text(value)
+    if not text:
+        return
+    message[key] = f"{message.get(key, '')}{text}"
+
+
+def _message_part_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return "".join(_message_part_text(item) for item in value)
+    if isinstance(value, dict):
+        if isinstance(value.get("text"), str):
+            return value["text"]
+        if isinstance(value.get("content"), str):
+            return value["content"]
+    return ""
+
+
+def _merge_tool_calls(existing: Any, incoming: list[Any]) -> list[dict[str, Any]]:
+    calls: list[dict[str, Any]] = existing if isinstance(existing, list) else []
+    for raw_call in incoming:
+        if not isinstance(raw_call, dict):
+            continue
+        try:
+            index = int(raw_call.get("index", len(calls)))
+        except (TypeError, ValueError):
+            index = len(calls)
+        while len(calls) <= index:
+            calls.append({})
+        _merge_nested_delta(calls[index], raw_call)
+    return calls
+
+
+def _merge_function_call(existing: Any, incoming: dict[str, Any]) -> dict[str, Any]:
+    call: dict[str, Any] = existing if isinstance(existing, dict) else {}
+    _merge_nested_delta(call, incoming)
+    return call
+
+
+def _merge_nested_delta(target: dict[str, Any], delta: dict[str, Any]) -> None:
+    for key, value in delta.items():
+        if key == "index":
+            continue
+        if isinstance(value, dict):
+            nested = target.get(key)
+            if not isinstance(nested, dict):
+                nested = {}
+                target[key] = nested
+            _merge_nested_delta(nested, value)
+        elif isinstance(value, str):
+            target[key] = f"{target.get(key, '')}{value}"
+        elif value is not None:
+            target[key] = value
 
 
 def _string_value(value: Any) -> str:

@@ -1009,18 +1009,254 @@ function renderRequestLogDetail() {
     button.classList.toggle('active', button.dataset.logTab === requestLogActiveTab);
   }
   if (!entry) {
-    requestLogDetailPre.textContent = '';
+    requestLogDetailPre.replaceChildren();
     return;
   }
   const record = entry.record || {};
   if (requestLogActiveTab === 'summary') {
-    requestLogDetailPre.textContent = requestLogSummaryText(entry);
+    setRequestLogDetailText(requestLogSummaryText(entry));
   } else if (requestLogActiveTab === 'request') {
-    requestLogDetailPre.textContent = JSON.stringify(record.request || {}, null, 2);
+    setRequestLogDetailText(JSON.stringify(record.request || {}, null, 2));
   } else if (requestLogActiveTab === 'response') {
-    requestLogDetailPre.textContent = JSON.stringify(record.response || {}, null, 2);
+    renderRequestLogResponse(record);
   } else {
-    requestLogDetailPre.textContent = JSON.stringify(entry, null, 2);
+    setRequestLogDetailText(JSON.stringify(entry, null, 2));
+  }
+}
+
+function setRequestLogDetailText(text) {
+  const pre = document.createElement('pre');
+  pre.className = 'request-log-detail-pre';
+  pre.textContent = text;
+  requestLogDetailPre.replaceChildren(pre);
+}
+
+function renderRequestLogResponse(record) {
+  const view = document.createElement('div');
+  view.className = 'request-response-view';
+  const response = record.response || {};
+  const body = response.body;
+  const statusCode = response.status_code ?? '-';
+
+  if (typeof body === 'string') {
+    const parsed = parseJsonText(body);
+    if (parsed && typeof parsed === 'object') {
+      view.appendChild(responseBodyView(parsed, statusCode, record.error));
+    } else {
+      if (record.error) {
+        view.appendChild(responseSection('Error', record.error, {tone: 'error'}));
+      }
+      view.appendChild(responseMetaGrid([
+        ['Status', String(statusCode)],
+        ['Body', `${body.length} chars`],
+      ]));
+      view.appendChild(responseSection('Body', body || '-'));
+    }
+    requestLogDetailPre.replaceChildren(view);
+    return;
+  }
+
+  if (!body || typeof body !== 'object') {
+    if (record.error) {
+      view.appendChild(responseSection('Error', record.error, {tone: 'error'}));
+    }
+    view.appendChild(responseMetaGrid([
+      ['Status', String(statusCode)],
+      ['Body', '-'],
+    ]));
+    view.appendChild(responseSection('Response', JSON.stringify(response || {}, null, 2) || '-'));
+    requestLogDetailPre.replaceChildren(view);
+    return;
+  }
+
+  view.appendChild(responseBodyView(body, statusCode, record.error));
+  requestLogDetailPre.replaceChildren(view);
+}
+
+function responseBodyView(body, statusCode, recordError = '') {
+  const fragment = document.createDocumentFragment();
+  const error = body.error?.message || body.error || recordError;
+  const usage = body.usage;
+  const choice = Array.isArray(body.choices) ? body.choices[0] : null;
+  const message = choice?.message || choice?.delta || {};
+  const content = firstNonEmpty(
+    messageContentDetailText(message.content),
+    messageContentDetailText(choice?.text),
+    messageContentDetailText(body.content),
+    messageContentDetailText(body.output_text),
+  );
+  const reasoning = firstNonEmpty(
+    messageContentDetailText(message.reasoning_content),
+    messageContentDetailText(choice?.reasoning_content),
+    messageContentDetailText(message.reasoning),
+    messageContentDetailText(body.reasoning),
+  );
+  const toolCalls = responseToolCalls(message, choice);
+  const embedding = responseEmbeddingSummary(body);
+  const finishReason = choice?.finish_reason || message.finish_reason || '-';
+  const metrics = [
+    ['Status', String(statusCode)],
+    ['Object', body.object || '-'],
+  ];
+  if (choice) metrics.push(['Finish', finishReason]);
+  if (usage && typeof usage === 'object') {
+    metrics.push(['Prompt', String(usage.prompt_tokens ?? '-')]);
+    metrics.push(['Completion', String(usage.completion_tokens ?? '-')]);
+    metrics.push(['Total', String(usage.total_tokens ?? '-')]);
+  }
+  if (embedding) {
+    metrics.push(['Embeddings', String(embedding.count)]);
+    metrics.push(['Dimensions', String(embedding.dimensions || '-')]);
+  }
+  fragment.appendChild(responseMetaGrid(metrics));
+
+  if (error) {
+    fragment.appendChild(responseSection('Error', valueText(error), {tone: 'error'}));
+  }
+  if (content) {
+    fragment.appendChild(responseSection('Answer', content));
+  }
+  if (reasoning) {
+    fragment.appendChild(responseSection('Reasoning', reasoning, {collapsed: true}));
+  }
+  if (toolCalls.length) {
+    fragment.appendChild(responseToolCallSection(toolCalls));
+  }
+  if (embedding) {
+    fragment.appendChild(responseEmbeddingSection(embedding));
+  }
+  if (usage && typeof usage === 'object') {
+    fragment.appendChild(responseSection('Usage', JSON.stringify(usage, null, 2), {variant: 'code'}));
+  }
+  if (!error && !content && !reasoning && !toolCalls.length && !embedding) {
+    fragment.appendChild(responseSection('Body', JSON.stringify(body, null, 2), {variant: 'code'}));
+  }
+  return fragment;
+}
+
+function responseMetaGrid(items) {
+  const grid = document.createElement('div');
+  grid.className = 'response-meta-grid';
+  for (const [label, value] of items) {
+    const item = document.createElement('div');
+    item.className = 'response-meta-item';
+    const labelEl = document.createElement('span');
+    labelEl.textContent = label;
+    const valueEl = document.createElement('strong');
+    valueEl.textContent = value;
+    item.append(labelEl, valueEl);
+    grid.appendChild(item);
+  }
+  return grid;
+}
+
+function responseSection(title, content, {variant = 'text', tone = '', collapsed = false} = {}) {
+  const section = document.createElement(collapsed ? 'details' : 'section');
+  section.className = `response-section${tone ? ` ${tone}` : ''}`;
+  if (collapsed) section.open = false;
+  const heading = document.createElement(collapsed ? 'summary' : 'h3');
+  heading.textContent = title;
+  const body = document.createElement(variant === 'code' ? 'pre' : 'div');
+  body.className = variant === 'code' ? 'response-code' : 'response-text';
+  body.textContent = content || '-';
+  section.append(heading, body);
+  return section;
+}
+
+function responseToolCallSection(toolCalls) {
+  const section = document.createElement('section');
+  section.className = 'response-section';
+  const heading = document.createElement('h3');
+  heading.textContent = 'Tool Calls';
+  section.appendChild(heading);
+  for (const call of toolCalls) {
+    const item = document.createElement('details');
+    item.className = 'response-tool-call';
+    item.open = true;
+    const summary = document.createElement('summary');
+    summary.textContent = call.function?.name || call.name || call.type || 'tool';
+    const pre = document.createElement('pre');
+    pre.className = 'response-code';
+    pre.textContent = formatToolCall(call);
+    item.append(summary, pre);
+    section.appendChild(item);
+  }
+  return section;
+}
+
+function responseEmbeddingSection(embedding) {
+  const lines = [
+    `${embedding.count} embedding${embedding.count === 1 ? '' : 's'}`,
+    embedding.dimensions ? `${embedding.dimensions} dimensions` : '',
+    embedding.preview.length ? `Preview: ${embedding.preview.join(', ')}` : '',
+  ].filter(Boolean);
+  return responseSection('Embeddings', lines.join('\n'));
+}
+
+function responseToolCalls(message, choice) {
+  const calls = [];
+  if (Array.isArray(message?.tool_calls)) calls.push(...message.tool_calls);
+  if (Array.isArray(choice?.tool_calls)) calls.push(...choice.tool_calls);
+  if (message?.function_call) calls.push(message.function_call);
+  return calls;
+}
+
+function formatToolCall(call) {
+  const fn = call.function || call;
+  const args = fn.arguments ?? call.arguments;
+  let parsedArgs = args;
+  if (typeof args === 'string') {
+    parsedArgs = parseJsonText(args) ?? args;
+  }
+  return JSON.stringify({
+    id: call.id,
+    type: call.type,
+    name: fn.name || call.name,
+    arguments: parsedArgs,
+  }, null, 2);
+}
+
+function responseEmbeddingSummary(body) {
+  if (!Array.isArray(body.data)) return null;
+  const first = body.data[0] || {};
+  if (!hasOwn(first, 'embedding')) return null;
+  const embedding = first.embedding;
+  const dimensions = Array.isArray(embedding) ? embedding.length : embedding?.length;
+  const preview = Array.isArray(embedding)
+    ? embedding.slice(0, 8).map((value) => Number.isFinite(value) ? Number(value).toPrecision(5) : String(value))
+    : [];
+  return {
+    count: body.data.length,
+    dimensions,
+    preview,
+  };
+}
+
+function messageContentDetailText(content) {
+  if (typeof content === 'string') return content;
+  if (content == null) return '';
+  if (Array.isArray(content)) {
+    return content.map((part) => {
+      if (typeof part === 'string') return part;
+      if (part?.type === 'text') return part.text || '';
+      if (part?.text) return part.text;
+      if (part?.type === 'image_url') return '[image]';
+      if (part?.type === 'input_audio') return '[audio]';
+      return valueText(part);
+    }).filter(Boolean).join('\n');
+  }
+  return valueText(content);
+}
+
+function firstNonEmpty(...values) {
+  return values.find((value) => String(value || '').trim()) || '';
+}
+
+function parseJsonText(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
   }
 }
 

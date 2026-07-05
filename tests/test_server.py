@@ -14,7 +14,12 @@ import httpx
 from fastapi.testclient import TestClient
 
 import server
-from llm_server.request_logs import RequestResponseLogger, read_request_logs, request_log_options
+from llm_server.request_logs import (
+    RequestResponseLogger,
+    decode_response_body,
+    read_request_logs,
+    request_log_options,
+)
 
 
 class EnvironmentTests(unittest.TestCase):
@@ -648,6 +653,53 @@ class EmbeddingsApiTests(unittest.TestCase):
 
 
 class RequestResponseLoggerTests(unittest.TestCase):
+    def test_stream_response_body_is_decoded_to_final_message(self) -> None:
+        body = (
+            b'data: {"id":"chatcmpl-test","choices":[{"index":0,"delta":{"role":"assistant","content":"Hel"}}]}\n\n'
+            b'data: {"choices":[{"index":0,"delta":{"content":"lo"}}]}\n\n'
+            b'data: {"choices":[{"index":0,"delta":{"reasoning_content":"thinking"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}\n\n'
+            b"data: [DONE]\n\n"
+        )
+
+        decoded = decode_response_body(body, "text/event-stream")
+
+        self.assertEqual(decoded["stream"], True)
+        self.assertEqual(decoded["done"], True)
+        self.assertEqual(decoded["chunks"], 3)
+        self.assertEqual(decoded["choices"][0]["message"]["role"], "assistant")
+        self.assertEqual(decoded["choices"][0]["message"]["content"], "Hello")
+        self.assertEqual(decoded["choices"][0]["message"]["reasoning_content"], "thinking")
+        self.assertEqual(decoded["choices"][0]["finish_reason"], "stop")
+        self.assertEqual(decoded["usage"]["total_tokens"], 5)
+
+    def test_existing_stream_logs_are_decoded_before_compaction(self) -> None:
+        sse = (
+            'data: {"choices":[{"index":0,"delta":{"role":"assistant","content":"hello "}}]}\n\n'
+            'data: {"choices":[{"index":0,"delta":{"content":"world"},"finish_reason":"stop"}]}\n\n'
+            "data: [DONE]\n\n"
+        )
+
+        with tempfile.TemporaryDirectory() as log_dir:
+            root = Path(log_dir)
+            request_logger = RequestResponseLogger(root, retention_days=7)
+            now = time.time()
+            request_logger.log(
+                request_id="stream",
+                endpoint="/v1/chat/completions",
+                model_id="model.gguf",
+                request_payload={"model": "model.gguf", "stream": True},
+                status_code=200,
+                response_body=sse,
+                started_at=now,
+                completed_at=now,
+                stream=True,
+            )
+
+            data = read_request_logs(log_dir=root)
+            body = data["records"][0]["record"]["response"]["body"]
+            self.assertEqual(body["choices"][0]["message"]["content"], "hello world")
+            self.assertNotIn("omitted", body)
+
     def test_old_daily_logs_are_deleted_on_write(self) -> None:
         with tempfile.TemporaryDirectory() as log_dir:
             root = Path(log_dir)
