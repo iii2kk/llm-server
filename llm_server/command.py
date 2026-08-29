@@ -11,7 +11,13 @@ from typing import Any
 
 import httpx
 
-from .config import BACKEND_HOST, DEFAULT_LLAMA_BACKEND, MODEL_LOAD_TIMEOUT_SECONDS
+from .config import (
+    BACKEND_HOST,
+    DEFAULT_LLAMA_BACKEND,
+    MODEL_LOAD_TIMEOUT_SECONDS,
+    REASONING_EFFORTS,
+    ROCM_BACKEND_IDS,
+)
 from .models import find_mmproj_for_model, resolve_llama_backend
 
 def optional_int(settings: dict[str, Any], key: str) -> int | None:
@@ -29,6 +35,16 @@ def optional_reasoning_budget(settings: dict[str, Any]) -> int | None:
     if value is not None and value < -1:
         raise ValueError("reasoning_budget must be -1 or a non-negative integer")
     return value
+
+
+def optional_reasoning_effort(settings: dict[str, Any]) -> str | None:
+    value = settings.get("reasoning_effort")
+    if value in (None, ""):
+        return None
+    effort = str(value).strip().lower()
+    if effort not in REASONING_EFFORTS:
+        raise ValueError(f"reasoning_effort must be one of: {', '.join(REASONING_EFFORTS)}")
+    return effort
 
 
 def optional_gpu_layers(settings: dict[str, Any]) -> str | None:
@@ -92,7 +108,7 @@ def build_llama_command(
         "--log-colors",
         "off",
     ]
-    if backend_id == "rocm":
+    if backend_id in ROCM_BACKEND_IDS:
         command.append("--direct-io")
 
     mmproj = find_mmproj_for_model(model)
@@ -129,6 +145,17 @@ def build_llama_command(
     if reasoning in ("auto", "on", "off"):
         command.extend(["--reasoning", str(reasoning)])
 
+    reasoning_effort = optional_reasoning_effort(settings)
+    if reasoning_effort is not None:
+        command.extend(["--reasoning-effort", reasoning_effort])
+
+    if "reasoning_preserve" in settings:
+        command.append(
+            "--reasoning-preserve"
+            if optional_bool(settings, "reasoning_preserve", False)
+            else "--no-reasoning-preserve"
+        )
+
     reasoning_budget = optional_reasoning_budget(settings)
     if reasoning_budget is not None:
         command.extend(["--reasoning-budget", str(reasoning_budget)])
@@ -151,6 +178,8 @@ def build_llama_command(
             command.extend(["--spec-draft-model", str(mtp_draft_path)])
             if gpu_layers is not None:
                 command.extend(["--spec-draft-ngl", gpu_layers])
+            if settings.get("mtp_type") == "fastmtp":
+                command.extend(["--spec-draft-p-min", "0"])
 
     return command
 

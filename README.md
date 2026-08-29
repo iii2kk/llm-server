@@ -10,12 +10,12 @@ uv sync
 ```
 
 必要に応じて `.env` を編集します。
-`MODEL_DIR` と、少なくとも1つの `LLAMA_BIN_DIR_VULKAN`、`LLAMA_BIN_DIR_ROCM`、
-または互換設定の `LLAMA_BIN_DIR` が必要です。未設定または空の場合、サーバーはエラーを表示して起動を中止します。
+`MODEL_DIR` と、少なくとも1つの `LLAMA_BIN_DIR_VULKAN`、`LLAMA_BIN_DIR_ROCM`、`LLAMA_BIN_DIR_ROCM_FASTMTP`、または互換設定の `LLAMA_BIN_DIR` が必要です。未設定または空の場合、サーバーはエラーを表示して起動を中止します。
 
 ```env
 LLAMA_BIN_DIR_VULKAN=/home/user/llama.cpp/build-vulkan/bin
 LLAMA_BIN_DIR_ROCM=/home/user/llama.cpp/build-hip/bin
+LLAMA_BIN_DIR_ROCM_FASTMTP=/home/user/FastMTP-llama.cpp/build-hip/bin
 DEFAULT_LLAMA_BACKEND=vulkan
 MODEL_DIR=/home/user/models
 BACKEND_HOST=127.0.0.1
@@ -92,7 +92,7 @@ Web UIでモデルを選択すると、`Start` または `Restart` 時に以下�
 
 | UI項目 | 指定できる値 | 説明 | `llama-server` オプション |
 | --- | --- | --- | --- |
-| `Backend` | `vulkan`, `rocm` | 使用する `llama-server` ビルドを選択します。設定はモデルごとに保存されます。 | 実行ファイルを切替 |
+| `Backend` | `vulkan`, `rocm`, `rocm-fastmtp` | 使用する `llama-server` ビルドを選択します。`rocm-fastmtp` はHauhauCSパッチ適用済みビルド向けです。設定はモデルごとに保存されます。 | 実行ファイルを切替 |
 | `Use MMProj` | on / off | モデルと同じディレクトリから検出した `mmproj*.gguf` を使います。画像や音声などのマルチモーダル入力に必要です。対応するMMProjがない場合は選択できません。 | `--mmproj` |
 | `Mode` | `auto`, `chat`, `embeddings` | モデルの用途です。`auto` はGGUFのarchitecture、pooling、embedding次元数から判定します。`embeddings` ではembedding専用モードで起動します。 | `--embeddings` |
 | `Pooling` | `auto`, `mean`, `cls`, `last` | embeddingベクトルの集約方法です。`auto` はGGUFの設定を使います。chatモードでは使用しません。embeddingモデルに利用可能なpooling情報がない場合は明示指定が必要です。 | `--pooling` |
@@ -106,6 +106,8 @@ Web UIでモデルを選択すると、`Start` または `Restart` 時に以下�
 | `MTP Draft Tokens` | 1以上の整数または空欄 | MTPヘッドが先読みする最大token数です。空欄では`3`を使います。大きすぎる値では受理率が下がり、逆に遅くなる場合があります。 | `--spec-draft-n-max` |
 | `Flash Attention` | `auto`, `on`, `off` | Flash Attentionの使用方法です。`auto` はbackendとデバイスの対応状況に任せます。対応環境では速度向上やメモリ削減が期待できます。 | `--flash-attn` |
 | `Reasoning` | `off`, `auto`, `on` | chat templateのreasoning/thinking機能を無効化、自動判定、または有効化します。embeddingモードでは通常使用しません。 | `--reasoning` |
+| `Reasoning Effort` | 未指定、`default`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` | chat templateへ渡すreasoning強度です。未指定ではllama.cppとモデルの既定値を使います。APIリクエストの`reasoning_effort`でも上書きできます。 | `--reasoning-effort` |
+| `Preserve Reasoning` | on / off | multi-turn会話の履歴にreasoningを保持します。対応chat templateを使うagent用途向けです。 | `--reasoning-preserve`, `--no-reasoning-preserve` |
 | `Reasoning Budget` | `-1`以上の整数または空欄 | reasoningに使用するtoken予算です。`-1`は無制限、`0`は即時終了、正の整数は上限token数です。空欄ではllama.cppの既定値を使います。 | `--reasoning-budget` |
 | `Reasoning Format` | `none`, `auto`, `deepseek`, `deepseek-legacy` | thinking部分をレスポンスから抽出する形式を指定します。`none` は抽出せず `message.content` に残し、`auto` はtemplateから判定します。`deepseek` 系は対応するthought tagを解析します。 | `--reasoning-format` |
 
@@ -121,9 +123,24 @@ embeddingではpooling方式やモデル構造により、入力全体を1回の
 
 ### MTPの注意点
 
-MTPは、MTPヘッドを内包しGGUFメタデータに`*.nextn_predict_layers`を持つ対応architecture（現在はQwen3.5/3.6、Step3.5系、Cohere2 MoE）と、Gemma4本体GGUFの同じディレクトリに`mtp*.gguf`のGemma4 assistant draftモデルを置く構成で利用できます。`MTP: auto`では対応モデルだけに`--spec-type draft-mtp`を追加し、外部draftモデルを検出した場合は`--spec-draft-model`も追加します。非対応モデルの起動方法は変更しません。生成レスポンスの`timings.draft_n`と`timings.draft_n_accepted`で、draft token数と受理数を確認できます。
+MTPは、MTPヘッドを内包しGGUFメタデータに`*.nextn_predict_layers`を持つ対応architecture（現在はQwen3.5/3.6/3.8、Step3.5系、Cohere2 MoE）と、Gemma4本体GGUFの同じディレクトリに`mtp*.gguf`のGemma4 assistant draftモデルを置く構成で利用できます。`MTP: auto`では対応モデルだけに`--spec-type draft-mtp`を追加し、外部draftモデルを検出した場合は`--spec-draft-model`も追加します。非対応モデルの起動方法は変更しません。生成レスポンスの`timings.draft_n`と`timings.draft_n_accepted`で、draft token数と受理数を確認できます。
 
-外部draftモデルは、同一ディレクトリ内の`mtp*.gguf`から自動検出します。明示的な`--spec-draft-model`パス指定のUIはまだありません。
+外部draftモデルは、同一ディレクトリ内の`mtp*.gguf`から自動検出します。`rocm-fastmtp` Backendでは、同一ディレクトリ内の`*-FastMTP-*.gguf`も自動検出し、`--spec-draft-model`へ渡します。FastMTP sidecarはモデル一覧には表示しません。明示的な`--spec-draft-model`パス指定のUIはまだありません。
+
+HauhauCS FastMTPを使う場合は、対象モデルと対応する`*-FastMTP-*.gguf`を同じディレクトリに置き、Web UIで`Backend: ROCm FastMTP (patched)`、`MTP: auto`または`on`を選びます。patched binaryは次の環境変数で指定します。
+
+```env
+LLAMA_BIN_DIR_ROCM_FASTMTP=/home/user/work/FastMTP-llama.cpp/build-hip/bin
+```
+
+Qwen3.8で短めのreasoningを使うリクエスト例です。モデルによってreasoningだけで多くのtokenを使うため、`max_tokens`は回答まで含む十分な値にします。
+
+```json
+{
+  "reasoning_effort": "low",
+  "max_tokens": 1536
+}
+```
 
 > [!IMPORTANT]
 > llama.cppで内包型MTPに対応するarchitectureが追加された場合は、`llm_server/models.py`の`EMBEDDED_MTP_ARCHITECTURES`も更新してください。更新しないと、`*.nextn_predict_layers`を持つ新しい対応GGUFでも`MTP: auto`では検出されません。llama.cppの各model実装で`LLM_GRAPH_TYPE_DECODER_MTP`を処理するarchitectureを確認し、検出対象とテストを追加してください。

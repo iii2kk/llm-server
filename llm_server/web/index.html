@@ -208,6 +208,23 @@
           </select>
         </div>
         <div class="field">
+          <label for="reasoning_effort">Reasoning Effort</label>
+          <select id="reasoning_effort">
+            <option value="">not specified</option>
+            <option value="default">default</option>
+            <option value="minimal">minimal</option>
+            <option value="low">low</option>
+            <option value="medium">medium</option>
+            <option value="high">high</option>
+            <option value="xhigh">xhigh</option>
+            <option value="max">max</option>
+          </select>
+        </div>
+        <label class="check-row" for="reasoning_preserve">
+          <input id="reasoning_preserve" type="checkbox">
+          Preserve Reasoning
+        </label>
+        <div class="field">
           <label for="reasoning_budget">Reasoning Budget</label>
           <input id="reasoning_budget" type="number" min="-1" step="1" placeholder="-1 (unlimited)">
         </div>
@@ -230,6 +247,6 @@
     </div>
   </dialog>
 
-  <script src="/static/app.js?v=request-logs-page-20260705"></script>
+  <script src="/static/app.js?v=fastmtp-20260820"></script>
 </body>
 </html>

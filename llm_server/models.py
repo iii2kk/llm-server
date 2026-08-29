@@ -9,6 +9,7 @@ from typing import Any
 
 from .config import (
     DEFAULT_LLAMA_BACKEND,
+    FASTMTP_BACKEND_IDS,
     GGUF_METADATA_CACHE,
     GGUF_POOLING_NAMES,
     GGUF_SCALAR_FORMATS,
@@ -42,7 +43,10 @@ def is_mmproj_file(path: Path) -> bool:
 
 
 def is_mtp_draft_file(path: Path) -> bool:
-    return path.name.lower().startswith("mtp") and path.suffix.lower() == ".gguf"
+    name = path.name.lower()
+    return path.suffix.lower() == ".gguf" and (
+        name.startswith("mtp") or "-fastmtp-" in name
+    )
 
 
 def find_mmproj_for_model(model: Path) -> Path | None:
@@ -56,17 +60,33 @@ def find_mmproj_for_model(model: Path) -> Path | None:
     return candidates[0]
 
 
-def find_mtp_draft_for_model(model: Path) -> Path | None:
+def find_mtp_draft_for_model(
+    model: Path,
+    *,
+    allow_fastmtp: bool = False,
+    target_architecture: str | None = None,
+) -> Path | None:
     candidates = sorted(
         path.resolve()
-        for path in model.parent.glob("mtp*.gguf")
-        if path.is_file() and path.resolve() != model.resolve()
+        for path in model.parent.glob("*.gguf")
+        if path.is_file()
+        and is_mtp_draft_file(path)
+        and path.resolve() != model.resolve()
     )
     for candidate in candidates:
         metadata = read_gguf_metadata(candidate)
         architecture = str(metadata["architecture"] or "").lower()
         if (
-            metadata["mtp_layers"] > 0
+            allow_fastmtp
+            and "-fastmtp-" in candidate.name.lower()
+            and metadata["mtp_layers"] > 0
+            and architecture in EMBEDDED_MTP_ARCHITECTURES
+            and (target_architecture is None or architecture == target_architecture)
+        ):
+            return candidate
+        if (
+            candidate.name.lower().startswith("mtp")
+            and metadata["mtp_layers"] > 0
             and architecture in EXTERNAL_MTP_DRAFT_ARCHITECTURES
         ):
             return candidate
@@ -285,11 +305,26 @@ def resolve_llama_backend(value: Any) -> tuple[str, Path]:
 def effective_model_config(model: Path, settings: dict[str, Any]) -> dict[str, Any]:
     metadata = read_gguf_metadata(model)
     architecture_name = str(metadata["architecture"] or "").lower()
-    mtp_draft_path = find_mtp_draft_for_model(model)
+    backend_id = resolve_llama_backend(settings.get("backend"))[0]
+    mtp_draft_path = find_mtp_draft_for_model(
+        model,
+        allow_fastmtp=backend_id in FASTMTP_BACKEND_IDS,
+        target_architecture=architecture_name,
+    )
     mtp_draft_metadata = read_gguf_metadata(mtp_draft_path) if mtp_draft_path is not None else None
-    external_mtp_supported = (
+    gemma_external_mtp_supported = (
         architecture_name in EXTERNAL_MTP_ARCHITECTURES
         and mtp_draft_metadata is not None
+        and mtp_draft_metadata["mtp_layers"] > 0
+        and str(mtp_draft_metadata["architecture"] or "").lower() in EXTERNAL_MTP_DRAFT_ARCHITECTURES
+    )
+    fastmtp_supported = (
+        backend_id in FASTMTP_BACKEND_IDS
+        and mtp_draft_path is not None
+        and "-fastmtp-" in mtp_draft_path.name.lower()
+        and architecture_name in EMBEDDED_MTP_ARCHITECTURES
+        and mtp_draft_metadata is not None
+        and str(mtp_draft_metadata["architecture"] or "").lower() == architecture_name
         and mtp_draft_metadata["mtp_layers"] > 0
     )
     mtp_layers = (
@@ -297,7 +332,7 @@ def effective_model_config(model: Path, settings: dict[str, Any]) -> dict[str, A
         if metadata["mtp_layers"] > 0
         else int(mtp_draft_metadata["mtp_layers"]) if mtp_draft_metadata is not None else 0
     )
-    mtp_supported = bool(metadata["mtp_supported"] or external_mtp_supported)
+    mtp_supported = bool(metadata["mtp_supported"] or gemma_external_mtp_supported or fastmtp_supported)
     configured_mode = validate_model_mode(settings.get("mode"))
     configured_pooling = validate_pooling(settings.get("pooling"))
     configured_mtp = validate_mtp_mode(settings.get("mtp"))
@@ -324,7 +359,12 @@ def effective_model_config(model: Path, settings: dict[str, Any]) -> dict[str, A
     effective_mtp = effective_mode == "chat" and mtp_supported and configured_mtp != "off"
     mtp_type = "none"
     if effective_mtp:
-        mtp_type = "external" if external_mtp_supported else "embedded"
+        if fastmtp_supported:
+            mtp_type = "fastmtp"
+        elif gemma_external_mtp_supported:
+            mtp_type = "external"
+        else:
+            mtp_type = "embedded"
 
     return {
         **metadata,

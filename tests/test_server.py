@@ -188,7 +188,7 @@ class BackendSettingsTests(unittest.TestCase):
         settings = server.normalize_backend_settings(
             "embedding.gguf",
             self.model,
-            {"mode": "auto", "pooling": "auto"},
+            {"backend": "vulkan", "mode": "auto", "pooling": "auto"},
         )
         self.assertEqual(settings["effective_mode"], "embeddings")
         self.assertEqual(settings["effective_pooling"], "last")
@@ -225,6 +225,22 @@ class BackendSettingsTests(unittest.TestCase):
 
         self.assertIn("--direct-io", command)
 
+    def test_fastmtp_rocm_command_enables_direct_io(self) -> None:
+        fake_bin_dir = self.root / "fastmtp-rocm-bin"
+        fake_bin_dir.mkdir()
+        llama_server = fake_bin_dir / "llama-server"
+        llama_server.write_text("#!/bin/sh\n", encoding="ascii")
+        llama_server.chmod(0o755)
+
+        command = server.build_llama_command(
+            {"backend": "rocm-fastmtp"},
+            model=self.model,
+            port=9999,
+            llama_bin_dir=fake_bin_dir,
+        )
+
+        self.assertIn("--direct-io", command)
+
     def test_reasoning_budget_is_added_to_command(self) -> None:
         fake_bin_dir = self.root / "bin"
         fake_bin_dir.mkdir()
@@ -255,6 +271,52 @@ class BackendSettingsTests(unittest.TestCase):
                 port=9999,
                 llama_bin_dir=fake_bin_dir,
             )
+
+    def test_reasoning_effort_is_validated_and_added_to_command(self) -> None:
+        fake_bin_dir = self.root / "reasoning-bin"
+        fake_bin_dir.mkdir()
+        llama_server = fake_bin_dir / "llama-server"
+        llama_server.write_text("#!/bin/sh\n", encoding="ascii")
+        llama_server.chmod(0o755)
+
+        command = server.build_llama_command(
+            {"reasoning_effort": "low"},
+            model=self.model,
+            port=9999,
+            llama_bin_dir=fake_bin_dir,
+        )
+        self.assertEqual(command[command.index("--reasoning-effort") + 1], "low")
+
+        with self.assertRaisesRegex(ValueError, "reasoning_effort"):
+            server.build_llama_command(
+                {"reasoning_effort": "extreme"},
+                model=self.model,
+                port=9999,
+                llama_bin_dir=fake_bin_dir,
+            )
+
+    def test_reasoning_preserve_is_added_to_command(self) -> None:
+        fake_bin_dir = self.root / "reasoning-preserve-bin"
+        fake_bin_dir.mkdir()
+        llama_server = fake_bin_dir / "llama-server"
+        llama_server.write_text("#!/bin/sh\n", encoding="ascii")
+        llama_server.chmod(0o755)
+
+        enabled = server.build_llama_command(
+            {"reasoning_preserve": True},
+            model=self.model,
+            port=9999,
+            llama_bin_dir=fake_bin_dir,
+        )
+        disabled = server.build_llama_command(
+            {"reasoning_preserve": False},
+            model=self.model,
+            port=9999,
+            llama_bin_dir=fake_bin_dir,
+        )
+
+        self.assertIn("--reasoning-preserve", enabled)
+        self.assertIn("--no-reasoning-preserve", disabled)
 
     def test_mtp_auto_detection_adds_speculative_flags(self) -> None:
         model = self.root / "mtp.gguf"
@@ -326,6 +388,53 @@ class BackendSettingsTests(unittest.TestCase):
         self.assertEqual(command[command.index("--spec-type") + 1], "draft-mtp")
         self.assertEqual(command[command.index("--spec-draft-model") + 1], str(draft_model.resolve()))
         self.assertEqual(command[command.index("--spec-draft-ngl") + 1], "all")
+
+    def test_fastmtp_sidecar_requires_fastmtp_backend(self) -> None:
+        model = self.root / "qwen.gguf"
+        draft_model = self.root / "Qwen-FastMTP-32K.gguf"
+        fields = [
+            ("general.architecture", 8, "qwen35"),
+            ("qwen35.nextn_predict_layers", 4, 1),
+        ]
+        write_gguf(model, fields)
+        write_gguf(draft_model, fields)
+        fake_bin_dir = self.root / "fastmtp-bin"
+        fake_bin_dir.mkdir()
+        llama_server = fake_bin_dir / "llama-server"
+        llama_server.write_text("#!/bin/sh\n", encoding="ascii")
+        llama_server.chmod(0o755)
+
+        with patch.object(
+            server,
+            "LLAMA_BIN_DIRS",
+            {"rocm": fake_bin_dir, "rocm-fastmtp": fake_bin_dir},
+        ):
+            upstream = server.normalize_backend_settings(
+                "qwen.gguf",
+                model,
+                {"backend": "rocm", "mtp": "auto", "gpu_layers": "all"},
+            )
+            fastmtp = server.normalize_backend_settings(
+                "qwen.gguf",
+                model,
+                {"backend": "rocm-fastmtp", "mtp": "auto", "gpu_layers": "all"},
+            )
+
+        self.assertEqual(upstream["mtp_type"], "embedded")
+        self.assertEqual(upstream["mtp_draft_path"], "")
+        self.assertEqual(fastmtp["mtp_type"], "fastmtp")
+        self.assertEqual(fastmtp["mtp_draft_path"], str(draft_model.resolve()))
+        self.assertTrue(server.is_mtp_draft_file(draft_model))
+
+        command = server.build_llama_command(
+            fastmtp,
+            model=model,
+            port=9999,
+            llama_bin_dir=fake_bin_dir,
+        )
+        self.assertEqual(command[command.index("--spec-draft-model") + 1], str(draft_model.resolve()))
+        self.assertEqual(command[command.index("--spec-draft-ngl") + 1], "all")
+        self.assertEqual(command[command.index("--spec-draft-p-min") + 1], "0")
 
     def test_mtp_off_does_not_add_speculative_flags(self) -> None:
         model = self.root / "mtp-off.gguf"

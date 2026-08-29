@@ -26,12 +26,13 @@ LLAMA_BIN_DIRS = {
     for backend_id, value in {
         "vulkan": os.getenv("LLAMA_BIN_DIR_VULKAN", legacy_llama_bin_dir).strip(),
         "rocm": os.getenv("LLAMA_BIN_DIR_ROCM", "").strip(),
+        "rocm-fastmtp": os.getenv("LLAMA_BIN_DIR_ROCM_FASTMTP", "").strip(),
     }.items()
     if value
 }
 if not LLAMA_BIN_DIRS:
     raise RuntimeError(
-        "At least one of LLAMA_BIN_DIR, LLAMA_BIN_DIR_VULKAN, or LLAMA_BIN_DIR_ROCM must be set"
+        "At least one llama.cpp binary directory must be configured"
     )
 DEFAULT_LLAMA_BACKEND = os.getenv("DEFAULT_LLAMA_BACKEND", "vulkan").strip().lower()
 if DEFAULT_LLAMA_BACKEND not in LLAMA_BIN_DIRS:
@@ -69,6 +70,8 @@ SAVED_BACKEND_SETTING_KEYS = (
     "mtp",
     "mtp_draft_tokens",
     "reasoning",
+    "reasoning_effort",
+    "reasoning_preserve",
     "reasoning_budget",
     "reasoning_format",
     "mode",
@@ -77,9 +80,13 @@ SAVED_BACKEND_SETTING_KEYS = (
 MODEL_MODES = ("auto", "chat", "embeddings")
 POOLING_TYPES = ("auto", "mean", "cls", "last")
 MTP_MODES = ("auto", "on", "off")
+REASONING_EFFORTS = ("default", "minimal", "low", "medium", "high", "xhigh", "max")
+ROCM_BACKEND_IDS = frozenset(("rocm", "rocm-fastmtp"))
+FASTMTP_BACKEND_IDS = frozenset(("rocm-fastmtp",))
 BACKEND_LABELS = {
     "vulkan": "Vulkan",
     "rocm": "ROCm (HIP)",
+    "rocm-fastmtp": "ROCm FastMTP (patched)",
 }
 GGUF_POOLING_NAMES = {
     0: "none",

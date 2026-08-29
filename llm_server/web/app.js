@@ -150,8 +150,11 @@ function settings() {
     flash_attn: document.getElementById('flash_attn').value,
     mtp: mtpInput.value,
     reasoning: document.getElementById('reasoning').value,
+    reasoning_preserve: document.getElementById('reasoning_preserve').checked,
     reasoning_format: document.getElementById('reasoning_format').value,
   };
+  const reasoningEffort = document.getElementById('reasoning_effort').value;
+  if (reasoningEffort) payload.reasoning_effort = reasoningEffort;
   if (gpuLayersMode.value === 'all') {
     payload.gpu_layers = 'all';
   } else if (gpuLayersMode.value === 'custom') {
@@ -255,6 +258,8 @@ function applySelectedModelSettings() {
   setSelectValue('flash_attn', settings.flash_attn, 'auto');
   setSelectValue('mtp', settings.mtp, 'auto');
   setSelectValue('reasoning', settings.reasoning, 'off');
+  setSelectValue('reasoning_effort', settings.reasoning_effort, '');
+  document.getElementById('reasoning_preserve').checked = Boolean(settings.reasoning_preserve);
   setSelectValue('reasoning_format', settings.reasoning_format, 'none');
   setSelectValue('backend', settings.backend, defaultBackend);
   setSelectValue('mode', settings.mode, 'auto');
