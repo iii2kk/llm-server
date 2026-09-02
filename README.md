@@ -10,13 +10,14 @@ uv sync
 ```
 
 必要に応じて `.env` を編集します。
-`MODEL_DIR` と、少なくとも1つの `LLAMA_BIN_DIR_VULKAN`、`LLAMA_BIN_DIR_ROCM`、`LLAMA_BIN_DIR_ROCM_FASTMTP`、または互換設定の `LLAMA_BIN_DIR` が必要です。未設定または空の場合、サーバーはエラーを表示して起動を中止します。
+`MODEL_DIR` と、少なくとも1つの利用可能な `LLAMA_BIN_DIR_CUDA`、`LLAMA_BIN_DIR_VULKAN`、`LLAMA_BIN_DIR_ROCM`、`LLAMA_BIN_DIR_ROCM_FASTMTP`、または互換設定の `LLAMA_BIN_DIR` が必要です。各パスには、llama.cppのビルドディレクトリ（例: `build-cuda`）またはその `bin` ディレクトリを指定できます。
 
 ```env
-LLAMA_BIN_DIR_VULKAN=/home/user/llama.cpp/build-vulkan/bin
-LLAMA_BIN_DIR_ROCM=/home/user/llama.cpp/build-hip/bin
-LLAMA_BIN_DIR_ROCM_FASTMTP=/home/user/FastMTP-llama.cpp/build-hip/bin
-DEFAULT_LLAMA_BACKEND=vulkan
+LLAMA_BIN_DIR_CUDA=/home/user/llama.cpp/build-cuda
+LLAMA_BIN_DIR_VULKAN=
+LLAMA_BIN_DIR_ROCM=
+LLAMA_BIN_DIR_ROCM_FASTMTP=
+DEFAULT_LLAMA_BACKEND=cuda
 MODEL_DIR=/home/user/models
 BACKEND_HOST=127.0.0.1
 BACKEND_PORT=8080
@@ -31,6 +32,8 @@ MODEL_STARTUP_FILE=
 PROXY_API_KEY=
 ```
 
+未設定のbackend、および指定先に実行可能な `llama-server` がないbackendはWeb UIの選択肢から除外されます。そのため、ROCmを導入していないPCではROCm関連の値を空欄にできます。利用可能なbackendが1つもない場合だけ、設定エラーとして起動を中止します。
+
 `PROXY_API_KEY` を設定した場合は、Web UIの「Proxy API Key」に同じ値を入力してください。APIクライアントも `Authorization: Bearer <key>` が必要になります。
 
 `max_tokens` がリクエストにない場合、proxyが `DEFAULT_MAX_TOKENS` を自動で追加します。`grammar` または `grammar_file` がある場合は `GRAMMAR_DEFAULT_MAX_TOKENS` を使います。
@@ -38,12 +41,14 @@ PROXY_API_KEY=
 ## 起動
 
 ```bash
-uv run python server.py
+./launch.sh
 ```
+
+`launch.sh` はプロジェクトディレクトリへ移動してから `uv run python server.py` を実行します。`server.py` の引数もそのまま渡せます。
 
 ブラウザで以下を開き、モデルと起動設定を選んで `Start` を押します。複数モデルを起動すると、`BACKEND_PORT` を開始ポートとして `8080`, `8081`, `8082`... のようにモデルごとの `llama-server` が別ポートで起動します。
 
-`Backend` では設定済みのVulkan版またはROCm版をモデルごとに選択できます。同じモデルは一度に1プロセスだけ起動します。実行中モデルのBackendを変更する場合は `Restart` を押してください。ROCm版では、mmapされたモデルからHIPメモリへのコピーによるロード遅延を避けるため、proxyが `--direct-io` を自動的に追加します。Vulkan版には追加しません。
+`Backend` では利用可能なCUDA版、Vulkan版、またはROCm版をモデルごとに選択できます。同じモデルは一度に1プロセスだけ起動します。実行中モデルのBackendを変更する場合は `Restart` を押してください。ROCm版では、mmapされたモデルからHIPメモリへのコピーによるロード遅延を避けるため、proxyが `--direct-io` を自動的に追加します。CUDA版とVulkan版には追加しません。
 
 ```text
 http://localhost:8000/
@@ -92,7 +97,7 @@ Web UIでモデルを選択すると、`Start` または `Restart` 時に以下�
 
 | UI項目 | 指定できる値 | 説明 | `llama-server` オプション |
 | --- | --- | --- | --- |
-| `Backend` | `vulkan`, `rocm`, `rocm-fastmtp` | 使用する `llama-server` ビルドを選択します。`rocm-fastmtp` はHauhauCSパッチ適用済みビルド向けです。設定はモデルごとに保存されます。 | 実行ファイルを切替 |
+| `Backend` | `cuda`, `vulkan`, `rocm`, `rocm-fastmtp` | 使用する `llama-server` ビルドを選択します。`rocm-fastmtp` はHauhauCSパッチ適用済みビルド向けです。設定はモデルごとに保存されます。 | 実行ファイルを切替 |
 | `Use MMProj` | on / off | モデルと同じディレクトリから検出した `mmproj*.gguf` を使います。画像や音声などのマルチモーダル入力に必要です。対応するMMProjがない場合は選択できません。 | `--mmproj` |
 | `Mode` | `auto`, `chat`, `embeddings` | モデルの用途です。`auto` はGGUFのarchitecture、pooling、embedding次元数から判定します。`embeddings` ではembedding専用モードで起動します。 | `--embeddings` |
 | `Pooling` | `auto`, `mean`, `cls`, `last` | embeddingベクトルの集約方法です。`auto` はGGUFの設定を使います。chatモードでは使用しません。embeddingモデルに利用可能なpooling情報がない場合は明示指定が必要です。 | `--pooling` |

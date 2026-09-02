@@ -20,19 +20,48 @@ def required_env(name: str) -> str:
     return value
 
 
+def find_llama_bin_dir(value: str) -> Path | None:
+    """Resolve either a llama.cpp build directory or its bin directory."""
+    if not value.strip():
+        return None
+
+    configured_dir = Path(value).expanduser()
+    for bin_dir in (configured_dir, configured_dir / "bin"):
+        llama_server = bin_dir / "llama-server"
+        if llama_server.is_file() and os.access(llama_server, os.X_OK):
+            return bin_dir
+    return None
+
+
+def available_llama_bin_dirs(configured_dirs: dict[str, str]) -> dict[str, Path]:
+    """Keep only configured backends that have a usable llama-server."""
+    available: dict[str, Path] = {}
+    for backend_id, value in configured_dirs.items():
+        bin_dir = find_llama_bin_dir(value)
+        if bin_dir is not None:
+            available[backend_id] = bin_dir
+    return available
+
+
 legacy_llama_bin_dir = os.getenv("LLAMA_BIN_DIR", "").strip()
-LLAMA_BIN_DIRS = {
-    backend_id: Path(value).expanduser()
-    for backend_id, value in {
-        "vulkan": os.getenv("LLAMA_BIN_DIR_VULKAN", legacy_llama_bin_dir).strip(),
-        "rocm": os.getenv("LLAMA_BIN_DIR_ROCM", "").strip(),
-        "rocm-fastmtp": os.getenv("LLAMA_BIN_DIR_ROCM_FASTMTP", "").strip(),
-    }.items()
-    if value
+CONFIGURED_LLAMA_BIN_DIRS = {
+    "cuda": os.getenv("LLAMA_BIN_DIR_CUDA", "").strip(),
+    "vulkan": os.getenv("LLAMA_BIN_DIR_VULKAN", legacy_llama_bin_dir).strip(),
+    "rocm": os.getenv("LLAMA_BIN_DIR_ROCM", "").strip(),
+    "rocm-fastmtp": os.getenv("LLAMA_BIN_DIR_ROCM_FASTMTP", "").strip(),
 }
+LLAMA_BIN_DIRS = available_llama_bin_dirs(CONFIGURED_LLAMA_BIN_DIRS)
 if not LLAMA_BIN_DIRS:
+    configured = ", ".join(
+        f"{backend_id}={value}"
+        for backend_id, value in CONFIGURED_LLAMA_BIN_DIRS.items()
+        if value
+    )
+    detail = f" Configured values: {configured}." if configured else ""
     raise RuntimeError(
-        "At least one llama.cpp binary directory must be configured"
+        "No usable llama-server binary was found. Set at least one LLAMA_BIN_DIR_* "
+        "variable to a build directory or bin directory containing an executable "
+        f"llama-server.{detail}"
     )
 DEFAULT_LLAMA_BACKEND = os.getenv("DEFAULT_LLAMA_BACKEND", "vulkan").strip().lower()
 if DEFAULT_LLAMA_BACKEND not in LLAMA_BIN_DIRS:
@@ -84,6 +113,7 @@ REASONING_EFFORTS = ("default", "minimal", "low", "medium", "high", "xhigh", "ma
 ROCM_BACKEND_IDS = frozenset(("rocm", "rocm-fastmtp"))
 FASTMTP_BACKEND_IDS = frozenset(("rocm-fastmtp",))
 BACKEND_LABELS = {
+    "cuda": "CUDA",
     "vulkan": "Vulkan",
     "rocm": "ROCm (HIP)",
     "rocm-fastmtp": "ROCm FastMTP (patched)",

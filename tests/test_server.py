@@ -36,6 +36,37 @@ class EnvironmentTests(unittest.TestCase):
         with patch.dict(os.environ, {"REQUIRED_PATH": "~/models"}, clear=True):
             self.assertEqual(server.required_env("REQUIRED_PATH"), "~/models")
 
+    def test_llama_bin_dir_accepts_build_root_or_bin_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            build_dir = Path(temp_dir) / "build-cuda"
+            bin_dir = build_dir / "bin"
+            bin_dir.mkdir(parents=True)
+            llama_server = bin_dir / "llama-server"
+            llama_server.write_text("#!/bin/sh\n", encoding="ascii")
+            llama_server.chmod(0o755)
+
+            self.assertEqual(server.find_llama_bin_dir(str(build_dir)), bin_dir)
+            self.assertEqual(server.find_llama_bin_dir(str(bin_dir)), bin_dir)
+
+    def test_unavailable_llama_backends_are_ignored(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            build_dir = Path(temp_dir) / "build-cuda"
+            bin_dir = build_dir / "bin"
+            bin_dir.mkdir(parents=True)
+            llama_server = bin_dir / "llama-server"
+            llama_server.write_text("#!/bin/sh\n", encoding="ascii")
+            llama_server.chmod(0o755)
+
+            available = server.available_llama_bin_dirs(
+                {
+                    "cuda": str(build_dir),
+                    "rocm": str(Path(temp_dir) / "missing-rocm"),
+                    "rocm-fastmtp": "",
+                }
+            )
+
+            self.assertEqual(available, {"cuda": bin_dir})
+
 
 def write_gguf(path: Path, fields: list[tuple[str, int, object]]) -> None:
     with path.open("wb") as handle:
@@ -188,7 +219,7 @@ class BackendSettingsTests(unittest.TestCase):
         settings = server.normalize_backend_settings(
             "embedding.gguf",
             self.model,
-            {"backend": "vulkan", "mode": "auto", "pooling": "auto"},
+            {"backend": "cuda", "mode": "auto", "pooling": "auto"},
         )
         self.assertEqual(settings["effective_mode"], "embeddings")
         self.assertEqual(settings["effective_pooling"], "last")
@@ -224,6 +255,22 @@ class BackendSettingsTests(unittest.TestCase):
             )
 
         self.assertIn("--direct-io", command)
+
+    def test_cuda_command_does_not_enable_direct_io(self) -> None:
+        fake_bin_dir = self.root / "cuda-bin"
+        fake_bin_dir.mkdir()
+        llama_server = fake_bin_dir / "llama-server"
+        llama_server.write_text("#!/bin/sh\n", encoding="ascii")
+        llama_server.chmod(0o755)
+
+        command = server.build_llama_command(
+            {"backend": "cuda"},
+            model=self.model,
+            port=9999,
+            llama_bin_dir=fake_bin_dir,
+        )
+
+        self.assertNotIn("--direct-io", command)
 
     def test_fastmtp_rocm_command_enables_direct_io(self) -> None:
         fake_bin_dir = self.root / "fastmtp-rocm-bin"
@@ -495,7 +542,7 @@ class BackendSettingsTests(unittest.TestCase):
         with patch.object(
             server,
             "LLAMA_BIN_DIRS",
-            {"vulkan": Path("/vulkan"), "rocm": Path("/rocm")},
+            {"cuda": Path("/cuda"), "vulkan": Path("/vulkan"), "rocm": Path("/rocm")},
         ):
             settings = server.normalize_backend_settings(
                 "embedding.gguf",
@@ -504,11 +551,18 @@ class BackendSettingsTests(unittest.TestCase):
             )
             self.assertEqual(settings["backend"], "rocm")
 
+            settings = server.normalize_backend_settings(
+                "embedding.gguf",
+                self.model,
+                {"backend": "cuda", "mode": "auto", "pooling": "auto"},
+            )
+            self.assertEqual(settings["backend"], "cuda")
+
             with self.assertRaisesRegex(ValueError, "backend must be one of"):
                 server.normalize_backend_settings(
                     "embedding.gguf",
                     self.model,
-                    {"backend": "cuda", "mode": "auto", "pooling": "auto"},
+                    {"backend": "metal", "mode": "auto", "pooling": "auto"},
                 )
 
     def test_manual_embedding_requires_pooling_when_unknown(self) -> None:
