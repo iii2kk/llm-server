@@ -74,6 +74,7 @@ modeInput.addEventListener('change', () => {
 });
 gpuLayersMode.addEventListener('change', () => updateGpuLayersInput(true));
 mtpInput.addEventListener('change', () => updateMtpControl());
+backendInput.addEventListener('change', () => updateMtpControl());
 logModel.addEventListener('change', () => connectLogStream());
 backendRows.addEventListener('click', (event) => {
   const button = event.target.closest('button[data-action]');
@@ -148,6 +149,8 @@ function settings() {
     pooling: poolingInput.value,
     mmproj_enabled: mmprojEnabled.checked && !mmprojEnabled.disabled,
     flash_attn: document.getElementById('flash_attn').value,
+    cache_type_k: document.getElementById('cache_type_k').value,
+    cache_type_v: document.getElementById('cache_type_v').value,
     mtp: mtpInput.value,
     reasoning: document.getElementById('reasoning').value,
     reasoning_preserve: document.getElementById('reasoning_preserve').checked,
@@ -197,16 +200,24 @@ function updatePoolingControl() {
 
 function updateMtpControl() {
   const item = selectedModel();
-  const supported = Boolean(item?.mtp_supported);
+  const compatibleBackends = Array.isArray(item?.mtp_backend_ids) ? item.mtp_backend_ids : [];
+  const supported = compatibleBackends.length
+    ? compatibleBackends.includes(backendInput.value)
+    : Boolean(item?.mtp_supported);
+  const available = compatibleBackends.length > 0 || Boolean(item?.mtp_supported);
   const effectiveMode = modeInput.value === 'auto' ? item?.detected_mode : modeInput.value;
   const enabled = effectiveMode === 'chat'
     && (mtpInput.value === 'on' || (mtpInput.value === 'auto' && supported));
   mtpDraftTokensInput.disabled = !enabled;
   const layers = Number(item?.mtp_layers || 0);
+  mtpDraftTokensInput.placeholder = item?.architecture === 'qwen4exp' ? '4' : '3';
   if (effectiveMode !== 'chat') {
     mtpMeta.textContent = 'Available for chat mode only';
   } else if (supported) {
     mtpMeta.textContent = `Detected: ${layers} MTP layer${layers === 1 ? '' : 's'}`;
+  } else if (available) {
+    const labels = compatibleBackends.map((backendId) => backendName(backendId)).join(', ');
+    mtpMeta.textContent = `Detected: ${layers} MTP layer${layers === 1 ? '' : 's'}; select ${labels}`;
   } else if (layers > 0) {
     mtpMeta.textContent = `Detected: ${layers} layer${layers === 1 ? '' : 's'}; embedded MTP is unsupported for this architecture`;
   } else {
@@ -256,6 +267,8 @@ function applySelectedModelSettings() {
   updateGpuLayersInput(false);
 
   setSelectValue('flash_attn', settings.flash_attn, 'auto');
+  setSelectValue('cache_type_k', settings.cache_type_k, 'auto');
+  setSelectValue('cache_type_v', settings.cache_type_v, 'auto');
   setSelectValue('mtp', settings.mtp, 'auto');
   setSelectValue('reasoning', settings.reasoning, 'off');
   setSelectValue('reasoning_effort', settings.reasoning_effort, '');
@@ -409,8 +422,12 @@ function updateModelRow(row, item) {
   setText(row.querySelector('[data-field="architecture"]'), `${item.architecture || 'unknown'}${item.effective_pooling ? ` / ${item.effective_pooling}` : ''}`);
   setClassName(mmproj, `pill ${item.mmproj_path ? 'ok' : ''}`.trim());
   setText(mmproj, item.mmproj_path ? 'yes' : 'none');
-  setClassName(mtp, `pill ${item.effective_mtp ? 'ok' : item.mtp_supported ? 'warn' : ''}`.trim());
-  setText(mtp, item.effective_mtp ? 'on' : item.mtp_supported ? 'off' : 'none');
+  const configuredBackend = savedSettings[item.relative_path]?.backend || defaultBackend;
+  const mtpSupported = Array.isArray(item.mtp_backend_ids)
+    ? item.mtp_backend_ids.includes(configuredBackend)
+    : Boolean(item.mtp_supported);
+  setClassName(mtp, `pill ${item.effective_mtp ? 'ok' : mtpSupported ? 'warn' : ''}`.trim());
+  setText(mtp, item.effective_mtp ? 'on' : mtpSupported ? 'off' : 'none');
   setClassName(saved, `pill ${savedSettings[item.relative_path] ? 'ok' : 'warn'}`);
   setText(saved, savedSettings[item.relative_path] ? 'saved' : 'default');
   updateStateContent(row.querySelector('[data-field="state"]'), backend);

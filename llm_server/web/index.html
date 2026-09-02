@@ -200,6 +200,36 @@
           </select>
         </div>
         <div class="field">
+          <label for="cache_type_k">K Cache Type</label>
+          <select id="cache_type_k">
+            <option value="auto">auto</option>
+            <option value="f32">f32</option>
+            <option value="f16">f16</option>
+            <option value="bf16">bf16</option>
+            <option value="q8_0">q8_0</option>
+            <option value="q4_0">q4_0</option>
+            <option value="q4_1">q4_1</option>
+            <option value="iq4_nl">iq4_nl</option>
+            <option value="q5_0">q5_0</option>
+            <option value="q5_1">q5_1</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="cache_type_v">V Cache Type</label>
+          <select id="cache_type_v">
+            <option value="auto">auto</option>
+            <option value="f32">f32</option>
+            <option value="f16">f16</option>
+            <option value="bf16">bf16</option>
+            <option value="q8_0">q8_0</option>
+            <option value="q4_0">q4_0</option>
+            <option value="q4_1">q4_1</option>
+            <option value="iq4_nl">iq4_nl</option>
+            <option value="q5_0">q5_0</option>
+            <option value="q5_1">q5_1</option>
+          </select>
+        </div>
+        <div class="field">
           <label for="reasoning">Reasoning</label>
           <select id="reasoning">
             <option value="off">off</option>
@@ -247,6 +277,6 @@
     </div>
   </dialog>
 
-  <script src="/static/app.js?v=fastmtp-20260820"></script>
+  <script src="/static/app.js?v=rocmfpx-20260903"></script>
 </body>
 </html>

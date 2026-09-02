@@ -47,6 +47,7 @@ legacy_llama_bin_dir = os.getenv("LLAMA_BIN_DIR", "").strip()
 CONFIGURED_LLAMA_BIN_DIRS = {
     "cuda": os.getenv("LLAMA_BIN_DIR_CUDA", "").strip(),
     "vulkan": os.getenv("LLAMA_BIN_DIR_VULKAN", legacy_llama_bin_dir).strip(),
+    "vulkan-rocmfpx": os.getenv("LLAMA_BIN_DIR_VULKAN_ROCMFPX", "").strip(),
     "rocm": os.getenv("LLAMA_BIN_DIR_ROCM", "").strip(),
     "rocm-fastmtp": os.getenv("LLAMA_BIN_DIR_ROCM_FASTMTP", "").strip(),
 }
@@ -95,6 +96,8 @@ SAVED_BACKEND_SETTING_KEYS = (
     "batch_size",
     "ubatch_size",
     "parallel",
+    "cache_type_k",
+    "cache_type_v",
     "flash_attn",
     "mtp",
     "mtp_draft_tokens",
@@ -112,12 +115,26 @@ MTP_MODES = ("auto", "on", "off")
 REASONING_EFFORTS = ("default", "minimal", "low", "medium", "high", "xhigh", "max")
 ROCM_BACKEND_IDS = frozenset(("rocm", "rocm-fastmtp"))
 FASTMTP_BACKEND_IDS = frozenset(("rocm-fastmtp",))
+ROCMFPX_BACKEND_IDS = frozenset(("vulkan-rocmfpx",))
 BACKEND_LABELS = {
     "cuda": "CUDA",
     "vulkan": "Vulkan",
+    "vulkan-rocmfpx": "Vulkan ROCmFPx (Qwen3.8 fork)",
     "rocm": "ROCm (HIP)",
     "rocm-fastmtp": "ROCm FastMTP (patched)",
 }
+CACHE_TYPES = (
+    "auto",
+    "f32",
+    "f16",
+    "bf16",
+    "q8_0",
+    "q4_0",
+    "q4_1",
+    "iq4_nl",
+    "q5_0",
+    "q5_1",
+)
 GGUF_POOLING_NAMES = {
     0: "none",
     1: "mean",

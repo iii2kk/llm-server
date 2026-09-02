@@ -19,12 +19,14 @@ from .config import (
     MODEL_MODES,
     MTP_MODES,
     POOLING_TYPES,
+    ROCMFPX_BACKEND_IDS,
 )
 
 SHARDED_GGUF_RE = re.compile(r"^(?P<base>.+)-(?P<index>\d{5})-of-(?P<count>\d{5})\.gguf$", re.IGNORECASE)
 EMBEDDED_MTP_ARCHITECTURES = {"qwen35", "qwen35moe", "step35", "cohere2moe"}
 EXTERNAL_MTP_ARCHITECTURES = {"gemma4"}
 EXTERNAL_MTP_DRAFT_ARCHITECTURES = {"gemma4-assistant"}
+QWEN4EXP_MTP_ARCHITECTURES = {"qwen4exp"}
 GGUF_METADATA_SEARCH_BYTES = 32 * 1024 * 1024
 
 def display_model_path(relative_path: Path) -> tuple[str, bool, bool]:
@@ -45,7 +47,9 @@ def is_mmproj_file(path: Path) -> bool:
 def is_mtp_draft_file(path: Path) -> bool:
     name = path.name.lower()
     return path.suffix.lower() == ".gguf" and (
-        name.startswith("mtp") or "-fastmtp-" in name
+        name.startswith("mtp")
+        or "-fastmtp-" in name
+        or "-flash-next-mtp-" in name
     )
 
 
@@ -64,6 +68,7 @@ def find_mtp_draft_for_model(
     model: Path,
     *,
     allow_fastmtp: bool = False,
+    allow_qwen4exp: bool = False,
     target_architecture: str | None = None,
 ) -> Path | None:
     candidates = sorted(
@@ -85,9 +90,21 @@ def find_mtp_draft_for_model(
         ):
             return candidate
         if (
+            allow_qwen4exp
+            and "-flash-next-mtp-" in candidate.name.lower()
+            and metadata["mtp_layers"] > 0
+            and architecture in QWEN4EXP_MTP_ARCHITECTURES
+            and (target_architecture is None or architecture == target_architecture)
+        ):
+            return candidate
+        if (
             candidate.name.lower().startswith("mtp")
             and metadata["mtp_layers"] > 0
             and architecture in EXTERNAL_MTP_DRAFT_ARCHITECTURES
+            and (
+                target_architecture is None
+                or target_architecture in EXTERNAL_MTP_ARCHITECTURES
+            )
         ):
             return candidate
     return None
@@ -306,37 +323,104 @@ def effective_model_config(model: Path, settings: dict[str, Any]) -> dict[str, A
     metadata = read_gguf_metadata(model)
     architecture_name = str(metadata["architecture"] or "").lower()
     backend_id = resolve_llama_backend(settings.get("backend"))[0]
-    mtp_draft_path = find_mtp_draft_for_model(
+    gemma_mtp_draft_path = find_mtp_draft_for_model(
         model,
-        allow_fastmtp=backend_id in FASTMTP_BACKEND_IDS,
         target_architecture=architecture_name,
     )
-    mtp_draft_metadata = read_gguf_metadata(mtp_draft_path) if mtp_draft_path is not None else None
+    fastmtp_draft_path = find_mtp_draft_for_model(
+        model,
+        allow_fastmtp=True,
+        target_architecture=architecture_name,
+    )
+    qwen4exp_mtp_draft_path = find_mtp_draft_for_model(
+        model,
+        allow_qwen4exp=True,
+        target_architecture=architecture_name,
+    )
+    gemma_mtp_draft_metadata = (
+        read_gguf_metadata(gemma_mtp_draft_path)
+        if gemma_mtp_draft_path is not None
+        else None
+    )
+    fastmtp_draft_metadata = (
+        read_gguf_metadata(fastmtp_draft_path)
+        if fastmtp_draft_path is not None
+        else None
+    )
+    qwen4exp_mtp_draft_metadata = (
+        read_gguf_metadata(qwen4exp_mtp_draft_path)
+        if qwen4exp_mtp_draft_path is not None
+        else None
+    )
     gemma_external_mtp_supported = (
         architecture_name in EXTERNAL_MTP_ARCHITECTURES
-        and mtp_draft_metadata is not None
-        and mtp_draft_metadata["mtp_layers"] > 0
-        and str(mtp_draft_metadata["architecture"] or "").lower() in EXTERNAL_MTP_DRAFT_ARCHITECTURES
+        and gemma_mtp_draft_metadata is not None
+        and gemma_mtp_draft_metadata["mtp_layers"] > 0
+        and str(gemma_mtp_draft_metadata["architecture"] or "").lower()
+        in EXTERNAL_MTP_DRAFT_ARCHITECTURES
     )
-    fastmtp_supported = (
-        backend_id in FASTMTP_BACKEND_IDS
-        and mtp_draft_path is not None
-        and "-fastmtp-" in mtp_draft_path.name.lower()
+    fastmtp_available = (
+        fastmtp_draft_path is not None
+        and "-fastmtp-" in fastmtp_draft_path.name.lower()
         and architecture_name in EMBEDDED_MTP_ARCHITECTURES
-        and mtp_draft_metadata is not None
-        and str(mtp_draft_metadata["architecture"] or "").lower() == architecture_name
-        and mtp_draft_metadata["mtp_layers"] > 0
+        and fastmtp_draft_metadata is not None
+        and str(fastmtp_draft_metadata["architecture"] or "").lower() == architecture_name
+        and fastmtp_draft_metadata["mtp_layers"] > 0
+    )
+    qwen4exp_external_mtp_available = (
+        qwen4exp_mtp_draft_path is not None
+        and architecture_name in QWEN4EXP_MTP_ARCHITECTURES
+        and qwen4exp_mtp_draft_metadata is not None
+        and str(qwen4exp_mtp_draft_metadata["architecture"] or "").lower()
+        == architecture_name
+        and qwen4exp_mtp_draft_metadata["mtp_layers"] > 0
+    )
+    fastmtp_supported = backend_id in FASTMTP_BACKEND_IDS and fastmtp_available
+    qwen4exp_external_mtp_supported = (
+        backend_id in ROCMFPX_BACKEND_IDS and qwen4exp_external_mtp_available
+    )
+    mtp_draft_path: Path | None = None
+    mtp_draft_metadata: dict[str, Any] | None = None
+    if fastmtp_supported:
+        mtp_draft_path = fastmtp_draft_path
+        mtp_draft_metadata = fastmtp_draft_metadata
+    elif qwen4exp_external_mtp_supported:
+        mtp_draft_path = qwen4exp_mtp_draft_path
+        mtp_draft_metadata = qwen4exp_mtp_draft_metadata
+    elif gemma_external_mtp_supported:
+        mtp_draft_path = gemma_mtp_draft_path
+        mtp_draft_metadata = gemma_mtp_draft_metadata
+    all_mtp_metadata = (
+        metadata,
+        gemma_mtp_draft_metadata,
+        fastmtp_draft_metadata,
+        qwen4exp_mtp_draft_metadata,
     )
     mtp_layers = (
-        metadata["mtp_layers"]
-        if metadata["mtp_layers"] > 0
-        else int(mtp_draft_metadata["mtp_layers"]) if mtp_draft_metadata is not None else 0
+        max(int(item["mtp_layers"]) for item in all_mtp_metadata if item is not None)
     )
-    mtp_supported = bool(metadata["mtp_supported"] or gemma_external_mtp_supported or fastmtp_supported)
+    mtp_supported = bool(
+        metadata["mtp_supported"]
+        or gemma_external_mtp_supported
+        or fastmtp_supported
+        or qwen4exp_external_mtp_supported
+    )
+    mtp_backend_ids: set[str] = set()
+    if metadata["mtp_supported"] or gemma_external_mtp_supported:
+        mtp_backend_ids.update(LLAMA_BIN_DIRS)
+    if fastmtp_available:
+        mtp_backend_ids.update(FASTMTP_BACKEND_IDS & LLAMA_BIN_DIRS.keys())
+    if qwen4exp_external_mtp_available:
+        mtp_backend_ids.update(ROCMFPX_BACKEND_IDS & LLAMA_BIN_DIRS.keys())
     configured_mode = validate_model_mode(settings.get("mode"))
     configured_pooling = validate_pooling(settings.get("pooling"))
     configured_mtp = validate_mtp_mode(settings.get("mtp"))
-    mtp_draft_tokens = validate_mtp_draft_tokens(settings.get("mtp_draft_tokens"))
+    mtp_draft_tokens_value = settings.get("mtp_draft_tokens")
+    mtp_draft_tokens = (
+        4
+        if mtp_draft_tokens_value in (None, "") and qwen4exp_external_mtp_supported
+        else validate_mtp_draft_tokens(mtp_draft_tokens_value)
+    )
     effective_mode = metadata["detected_mode"] if configured_mode == "auto" else configured_mode
     detected_pooling = metadata["pooling"]
     effective_pooling = detected_pooling if configured_pooling == "auto" else configured_pooling
@@ -361,6 +445,8 @@ def effective_model_config(model: Path, settings: dict[str, Any]) -> dict[str, A
     if effective_mtp:
         if fastmtp_supported:
             mtp_type = "fastmtp"
+        elif qwen4exp_external_mtp_supported:
+            mtp_type = "qwen4exp-external"
         elif gemma_external_mtp_supported:
             mtp_type = "external"
         else:
@@ -370,6 +456,7 @@ def effective_model_config(model: Path, settings: dict[str, Any]) -> dict[str, A
         **metadata,
         "mtp_layers": mtp_layers,
         "mtp_supported": mtp_supported,
+        "mtp_backend_ids": sorted(mtp_backend_ids),
         "mtp_draft_path": str(mtp_draft_path or ""),
         "mtp_type": mtp_type,
         "configured_mode": configured_mode,
@@ -390,13 +477,13 @@ def normalize_backend_settings(model_id: str, model_path: Path, settings: dict[s
     normalized["mode"] = validate_model_mode(normalized.get("mode"))
     normalized["pooling"] = validate_pooling(normalized.get("pooling"))
     normalized["mtp"] = validate_mtp_mode(normalized.get("mtp"))
-    normalized["mtp_draft_tokens"] = validate_mtp_draft_tokens(normalized.get("mtp_draft_tokens"))
     config = effective_model_config(model_path, normalized)
     normalized["effective_mode"] = config["effective_mode"]
     normalized["effective_pooling"] = config["effective_pooling"]
     normalized["effective_mtp"] = config["effective_mtp"]
     normalized["mtp_draft_path"] = config["mtp_draft_path"]
     normalized["mtp_type"] = config["mtp_type"]
+    normalized["mtp_draft_tokens"] = config["mtp_draft_tokens"]
     return normalized
 
 
@@ -502,7 +589,7 @@ def resolve_model_reference(
 
     if not candidate.exists() or not candidate.is_file() or candidate.suffix.lower() != ".gguf":
         return None
-    if is_mmproj_file(candidate):
+    if is_mmproj_file(candidate) or is_mtp_draft_file(candidate):
         return None
 
     return str(relative), candidate

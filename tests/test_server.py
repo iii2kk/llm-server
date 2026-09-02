@@ -216,11 +216,12 @@ class BackendSettingsTests(unittest.TestCase):
         self.temp_dir.cleanup()
 
     def test_normalization_and_command(self) -> None:
-        settings = server.normalize_backend_settings(
-            "embedding.gguf",
-            self.model,
-            {"backend": "cuda", "mode": "auto", "pooling": "auto"},
-        )
+        with patch.object(server, "LLAMA_BIN_DIRS", {"cuda": Path("/cuda")}):
+            settings = server.normalize_backend_settings(
+                "embedding.gguf",
+                self.model,
+                {"backend": "cuda", "mode": "auto", "pooling": "auto"},
+            )
         self.assertEqual(settings["effective_mode"], "embeddings")
         self.assertEqual(settings["effective_pooling"], "last")
 
@@ -482,6 +483,97 @@ class BackendSettingsTests(unittest.TestCase):
         self.assertEqual(command[command.index("--spec-draft-model") + 1], str(draft_model.resolve()))
         self.assertEqual(command[command.index("--spec-draft-ngl") + 1], "all")
         self.assertEqual(command[command.index("--spec-draft-p-min") + 1], "0")
+
+    def test_qwen4exp_sidecar_requires_rocmfpx_backend(self) -> None:
+        model = self.root / "Qwen3.8-Flash-Next-ROCmFP4-FAST-v2-ple16.gguf"
+        draft_model = self.root / "Qwen3.8-Flash-Next-MTP-ROCmFP4-FAST.gguf"
+        write_gguf(model, [("general.architecture", 8, "qwen4exp")])
+        write_gguf(
+            draft_model,
+            [
+                ("general.architecture", 8, "qwen4exp"),
+                ("qwen4exp.nextn_predict_layers", 4, 1),
+            ],
+        )
+        fake_bin_dir = self.root / "rocmfpx-bin"
+        fake_bin_dir.mkdir()
+        llama_server = fake_bin_dir / "llama-server"
+        llama_server.write_text("#!/bin/sh\n", encoding="ascii")
+        llama_server.chmod(0o755)
+
+        with patch.object(
+            server,
+            "LLAMA_BIN_DIRS",
+            {"vulkan": fake_bin_dir, "vulkan-rocmfpx": fake_bin_dir},
+        ):
+            upstream = server.normalize_backend_settings(
+                model.name,
+                model,
+                {"backend": "vulkan", "mtp": "auto"},
+            )
+            rocmfpx = server.normalize_backend_settings(
+                model.name,
+                model,
+                {
+                    "backend": "vulkan-rocmfpx",
+                    "mtp": "auto",
+                    "gpu_layers": "all",
+                    "cache_type_k": "q8_0",
+                    "cache_type_v": "q8_0",
+                    "flash_attn": "on",
+                },
+            )
+
+        self.assertFalse(upstream["effective_mtp"])
+        self.assertEqual(rocmfpx["mtp_type"], "qwen4exp-external")
+        self.assertEqual(rocmfpx["mtp_draft_path"], str(draft_model.resolve()))
+        self.assertEqual(rocmfpx["mtp_draft_tokens"], 4)
+        self.assertTrue(server.is_mtp_draft_file(draft_model))
+
+        command = server.build_llama_command(
+            rocmfpx,
+            model=model,
+            port=9999,
+            llama_bin_dir=fake_bin_dir,
+        )
+        self.assertNotIn("--direct-io", command)
+        self.assertEqual(command[command.index("--spec-draft-model") + 1], str(draft_model.resolve()))
+        self.assertEqual(command[command.index("--spec-draft-ngl") + 1], "all")
+        self.assertEqual(command[command.index("--spec-draft-n-min") + 1], "2")
+        self.assertEqual(command[command.index("--spec-draft-n-max") + 1], "4")
+        self.assertIn("--spec-draft-adaptive", command)
+        self.assertEqual(command[command.index("--cache-type-k") + 1], "q8_0")
+        self.assertEqual(command[command.index("--cache-type-v") + 1], "q8_0")
+
+        with (
+            patch("llm_server.models.MODEL_DIR", self.root),
+            patch("llm_server.models.LLAMA_BIN_DIRS", {"vulkan-rocmfpx": fake_bin_dir}),
+            patch("llm_server.models.DEFAULT_LLAMA_BACKEND", "vulkan-rocmfpx"),
+        ):
+            options = server.model_options(
+                {model.name: {"backend": "vulkan-rocmfpx", "mtp": "auto"}}
+            )
+            resolved_draft = server.resolve_model_reference(draft_model.name, {})
+
+        names = {item["name"] for item in options}
+        self.assertIn(model.name, names)
+        self.assertNotIn(draft_model.name, names)
+        self.assertIsNone(resolved_draft)
+
+    def test_cache_types_are_validated(self) -> None:
+        fake_bin_dir = self.root / "cache-bin"
+        fake_bin_dir.mkdir()
+        llama_server = fake_bin_dir / "llama-server"
+        llama_server.write_text("#!/bin/sh\n", encoding="ascii")
+        llama_server.chmod(0o755)
+
+        with self.assertRaisesRegex(ValueError, "cache_type_k"):
+            server.build_llama_command(
+                {"cache_type_k": "not-a-cache-type"},
+                model=self.model,
+                port=9999,
+                llama_bin_dir=fake_bin_dir,
+            )
 
     def test_mtp_off_does_not_add_speculative_flags(self) -> None:
         model = self.root / "mtp-off.gguf"

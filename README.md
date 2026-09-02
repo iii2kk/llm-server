@@ -10,11 +10,12 @@ uv sync
 ```
 
 必要に応じて `.env` を編集します。
-`MODEL_DIR` と、少なくとも1つの利用可能な `LLAMA_BIN_DIR_CUDA`、`LLAMA_BIN_DIR_VULKAN`、`LLAMA_BIN_DIR_ROCM`、`LLAMA_BIN_DIR_ROCM_FASTMTP`、または互換設定の `LLAMA_BIN_DIR` が必要です。各パスには、llama.cppのビルドディレクトリ（例: `build-cuda`）またはその `bin` ディレクトリを指定できます。
+`MODEL_DIR` と、少なくとも1つの利用可能な `LLAMA_BIN_DIR_CUDA`、`LLAMA_BIN_DIR_VULKAN`、`LLAMA_BIN_DIR_VULKAN_ROCMFPX`、`LLAMA_BIN_DIR_ROCM`、`LLAMA_BIN_DIR_ROCM_FASTMTP`、または互換設定の `LLAMA_BIN_DIR` が必要です。各パスには、llama.cppのビルドディレクトリ（例: `build-cuda`）またはその `bin` ディレクトリを指定できます。
 
 ```env
 LLAMA_BIN_DIR_CUDA=/home/user/llama.cpp/build-cuda
 LLAMA_BIN_DIR_VULKAN=
+LLAMA_BIN_DIR_VULKAN_ROCMFPX=
 LLAMA_BIN_DIR_ROCM=
 LLAMA_BIN_DIR_ROCM_FASTMTP=
 DEFAULT_LLAMA_BACKEND=cuda
@@ -48,7 +49,7 @@ PROXY_API_KEY=
 
 ブラウザで以下を開き、モデルと起動設定を選んで `Start` を押します。複数モデルを起動すると、`BACKEND_PORT` を開始ポートとして `8080`, `8081`, `8082`... のようにモデルごとの `llama-server` が別ポートで起動します。
 
-`Backend` では利用可能なCUDA版、Vulkan版、またはROCm版をモデルごとに選択できます。同じモデルは一度に1プロセスだけ起動します。実行中モデルのBackendを変更する場合は `Restart` を押してください。ROCm版では、mmapされたモデルからHIPメモリへのコピーによるロード遅延を避けるため、proxyが `--direct-io` を自動的に追加します。CUDA版とVulkan版には追加しません。
+`Backend` では利用可能なCUDA版、Vulkan版、Vulkan ROCmFPx版、またはROCm版をモデルごとに選択できます。同じモデルは一度に1プロセスだけ起動します。実行中モデルのBackendを変更する場合は `Restart` を押してください。ROCm版では、mmapされたモデルからHIPメモリへのコピーによるロード遅延を避けるため、proxyが `--direct-io` を自動的に追加します。CUDA版とVulkan版には追加しません。
 
 ```text
 http://localhost:8000/
@@ -97,7 +98,7 @@ Web UIでモデルを選択すると、`Start` または `Restart` 時に以下�
 
 | UI項目 | 指定できる値 | 説明 | `llama-server` オプション |
 | --- | --- | --- | --- |
-| `Backend` | `cuda`, `vulkan`, `rocm`, `rocm-fastmtp` | 使用する `llama-server` ビルドを選択します。`rocm-fastmtp` はHauhauCSパッチ適用済みビルド向けです。設定はモデルごとに保存されます。 | 実行ファイルを切替 |
+| `Backend` | `cuda`, `vulkan`, `vulkan-rocmfpx`, `rocm`, `rocm-fastmtp` | 使用する `llama-server` ビルドを選択します。`vulkan-rocmfpx` はLaurentZuijdwijk版、`rocm-fastmtp` はHauhauCSパッチ適用済みビルド向けです。設定はモデルごとに保存されます。 | 実行ファイルを切替 |
 | `Use MMProj` | on / off | モデルと同じディレクトリから検出した `mmproj*.gguf` を使います。画像や音声などのマルチモーダル入力に必要です。対応するMMProjがない場合は選択できません。 | `--mmproj` |
 | `Mode` | `auto`, `chat`, `embeddings` | モデルの用途です。`auto` はGGUFのarchitecture、pooling、embedding次元数から判定します。`embeddings` ではembedding専用モードで起動します。 | `--embeddings` |
 | `Pooling` | `auto`, `mean`, `cls`, `last` | embeddingベクトルの集約方法です。`auto` はGGUFの設定を使います。chatモードでは使用しません。embeddingモデルに利用可能なpooling情報がない場合は明示指定が必要です。 | `--pooling` |
@@ -108,8 +109,10 @@ Web UIでモデルを選択すると、`Start` または `Restart` 時に以下�
 | `UBatch` | 整数または空欄 | 実際の計算単位となる物理batchの最大token数です。小さくするとピークメモリを抑えられますが、prompt処理が遅くなる場合があります。 | `--ubatch-size` |
 | `Parallel` | 整数または空欄 | 同時処理に使うserver slot数です。空欄ではbackendが自動決定します。値を増やすと同時リクエストを処理しやすくなりますが、Contextとメモリをslot間で使用します。 | `--parallel` |
 | `MTP` | `auto`, `on`, `off` | Multi-Token Predictionによるspeculative decodingです。`auto` はGGUFの`nextn_predict_layers`メタデータを検出したchatモデルで有効化します。`on` は非対応GGUFでは起動エラーになります。 | `--spec-type draft-mtp` |
-| `MTP Draft Tokens` | 1以上の整数または空欄 | MTPヘッドが先読みする最大token数です。空欄では`3`を使います。大きすぎる値では受理率が下がり、逆に遅くなる場合があります。 | `--spec-draft-n-max` |
+| `MTP Draft Tokens` | 1以上の整数または空欄 | MTPヘッドが先読みする最大token数です。空欄では通常`3`、Qwen3.8 Flash Next ROCmFPxでは`4`を使います。大きすぎる値では受理率が下がり、逆に遅くなる場合があります。 | `--spec-draft-n-max` |
 | `Flash Attention` | `auto`, `on`, `off` | Flash Attentionの使用方法です。`auto` はbackendとデバイスの対応状況に任せます。対応環境では速度向上やメモリ削減が期待できます。 | `--flash-attn` |
+| `K Cache Type` | `auto`, `f32`, `f16`, `bf16`, `q8_0`, `q4_0`, `q4_1`, `iq4_nl`, `q5_0`, `q5_1` | KV cacheのK側の型です。`auto`ではbackend既定値を使います。量子化型はContextあたりのメモリを削減します。 | `--cache-type-k` |
+| `V Cache Type` | `auto`, `f32`, `f16`, `bf16`, `q8_0`, `q4_0`, `q4_1`, `iq4_nl`, `q5_0`, `q5_1` | KV cacheのV側の型です。`auto`ではbackend既定値を使います。 | `--cache-type-v` |
 | `Reasoning` | `off`, `auto`, `on` | chat templateのreasoning/thinking機能を無効化、自動判定、または有効化します。embeddingモードでは通常使用しません。 | `--reasoning` |
 | `Reasoning Effort` | 未指定、`default`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` | chat templateへ渡すreasoning強度です。未指定ではllama.cppとモデルの既定値を使います。APIリクエストの`reasoning_effort`でも上書きできます。 | `--reasoning-effort` |
 | `Preserve Reasoning` | on / off | multi-turn会話の履歴にreasoningを保持します。対応chat templateを使うagent用途向けです。 | `--reasoning-preserve`, `--no-reasoning-preserve` |
@@ -128,9 +131,37 @@ embeddingではpooling方式やモデル構造により、入力全体を1回の
 
 ### MTPの注意点
 
-MTPは、MTPヘッドを内包しGGUFメタデータに`*.nextn_predict_layers`を持つ対応architecture（現在はQwen3.5/3.6/3.8、Step3.5系、Cohere2 MoE）と、Gemma4本体GGUFの同じディレクトリに`mtp*.gguf`のGemma4 assistant draftモデルを置く構成で利用できます。`MTP: auto`では対応モデルだけに`--spec-type draft-mtp`を追加し、外部draftモデルを検出した場合は`--spec-draft-model`も追加します。非対応モデルの起動方法は変更しません。生成レスポンスの`timings.draft_n`と`timings.draft_n_accepted`で、draft token数と受理数を確認できます。
+MTPは、MTPヘッドを内包しGGUFメタデータに`*.nextn_predict_layers`を持つ対応architecture（現在はQwen3.5/3.6/3.8、Step3.5系、Cohere2 MoE）と、別ファイルのMTP draftを本体GGUFと同じディレクトリに置く構成で利用できます。`MTP: auto`では対応モデルだけに`--spec-type draft-mtp`を追加し、外部draftモデルを検出した場合は`--spec-draft-model`も追加します。非対応モデルの起動方法は変更しません。生成レスポンスの`timings.draft_n`と`timings.draft_n_accepted`で、draft token数と受理数を確認できます。
 
-外部draftモデルは、同一ディレクトリ内の`mtp*.gguf`から自動検出します。`rocm-fastmtp` Backendでは、同一ディレクトリ内の`*-FastMTP-*.gguf`も自動検出し、`--spec-draft-model`へ渡します。FastMTP sidecarはモデル一覧には表示しません。明示的な`--spec-draft-model`パス指定のUIはまだありません。
+外部draftモデルは、同一ディレクトリ内の`mtp*.gguf`から自動検出します。`rocm-fastmtp` Backendでは`*-FastMTP-*.gguf`、`vulkan-rocmfpx` BackendのQwen3.8 Flash Nextでは`*-Flash-Next-MTP-*.gguf`も検出します。これらのsidecarはモデル一覧には表示しません。Qwen3.8 Flash Nextではモデルカード推奨の`--spec-draft-adaptive --spec-draft-n-min 2`も自動追加し、空欄のMTP Draft Tokensは`4`になります。明示的な`--spec-draft-model`パス指定のUIはまだありません。
+
+### Qwen3.8 Flash Next ROCmFP4
+
+[LaurentZuijdwijk/llama.cpp](https://github.com/LaurentZuijdwijk/llama.cpp) の `vulkan/qwen4exp-rocmfpx` ビルドを次のように登録します。
+
+```env
+LLAMA_BIN_DIR_VULKAN_ROCMFPX=/home/user/work/llama.cpp-qwen38-rocmfpx/build/bin
+MODEL_LOAD_TIMEOUT_SECONDS=180
+```
+
+[agentionai/Qwen3.8-Flash-Next-ROCmFP4-FAST-imatrix-GGUF](https://huggingface.co/agentionai/Qwen3.8-Flash-Next-ROCmFP4-FAST-imatrix-GGUF) のPLE16本体、MTP、MMProjを同じディレクトリへ置くとすべて自動検出されます。Web UIでは次の設定が推奨です。
+
+```text
+Backend: Vulkan ROCmFPx (Qwen3.8 fork)
+Use MMProj: on
+GPU Layers: all
+Context: 32768
+Batch: 2048
+UBatch: 512
+Parallel: 1
+MTP: auto
+MTP Draft Tokens: 4（空欄でも可）
+Flash Attention: on
+K Cache Type: q8_0
+V Cache Type: q8_0
+```
+
+PLE16版はn-gram tableが分割済みなので`--ngram-on-disk`は不要です。約87 GiBの本体にMTPとMMProjも加わるため、96 GiB VRAM構成ではContextを段階的に増やしてください。ロードに1分以上かかるため、`MODEL_LOAD_TIMEOUT_SECONDS=180`を推奨します。
 
 HauhauCS FastMTPを使う場合は、対象モデルと対応する`*-FastMTP-*.gguf`を同じディレクトリに置き、Web UIで`Backend: ROCm FastMTP (patched)`、`MTP: auto`または`on`を選びます。patched binaryは次の環境変数で指定します。
 

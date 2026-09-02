@@ -13,6 +13,7 @@ import httpx
 
 from .config import (
     BACKEND_HOST,
+    CACHE_TYPES,
     DEFAULT_LLAMA_BACKEND,
     MODEL_LOAD_TIMEOUT_SECONDS,
     REASONING_EFFORTS,
@@ -63,6 +64,16 @@ def optional_gpu_layers(settings: dict[str, Any]) -> str | None:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise ValueError("gpu_layers must be auto, all, or a non-negative integer")
     return str(value)
+
+
+def optional_cache_type(settings: dict[str, Any], key: str) -> str | None:
+    value = settings.get(key)
+    if value in (None, "", "auto"):
+        return None
+    cache_type = str(value).strip().lower()
+    if cache_type not in CACHE_TYPES:
+        raise ValueError(f"{key} must be one of: {', '.join(CACHE_TYPES)}")
+    return cache_type
 
 
 def optional_bool(settings: dict[str, Any], key: str, default: bool) -> bool:
@@ -137,6 +148,14 @@ def build_llama_command(
     if gpu_layers is not None:
         command.extend(["--n-gpu-layers", gpu_layers])
 
+    for key, flag in (
+        ("cache_type_k", "--cache-type-k"),
+        ("cache_type_v", "--cache-type-v"),
+    ):
+        cache_type = optional_cache_type(settings, key)
+        if cache_type is not None:
+            command.extend([flag, cache_type])
+
     flash_attn = settings.get("flash_attn")
     if flash_attn in ("on", "off", "auto"):
         command.extend(["--flash-attn", str(flash_attn)])
@@ -180,6 +199,10 @@ def build_llama_command(
                 command.extend(["--spec-draft-ngl", gpu_layers])
             if settings.get("mtp_type") == "fastmtp":
                 command.extend(["--spec-draft-p-min", "0"])
+            elif settings.get("mtp_type") == "qwen4exp-external":
+                command.extend(
+                    ["--spec-draft-adaptive", "--spec-draft-n-min", "2"]
+                )
 
     return command
 
